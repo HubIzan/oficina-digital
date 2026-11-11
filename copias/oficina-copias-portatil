@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# Anota la ultima vez que el portatil tenia la copia cifrada completa. La lanza un temporizador.
+# Si el portatil no esta al dia no se anota nada: asi la fecha envejece y el rack avisa.
+set -euo pipefail
+ESTADO=/var/lib/oficina-portatil-estado/ultima.json
+CLAVE="$(python3 -c "import sys, xml.etree.ElementTree as E; print(E.parse(sys.argv[1]).getroot().find('gui').findtext('apikey'))" /var/lib/syncthing/estado/config.xml)"
+api() { curl -fsS --max-time 20 --unix-socket /run/syncthing/gui.sock -H "X-API-Key: $CLAVE" "http://localhost$1"; }
+PORTATIL="$(api /rest/config/devices | jq -r '.[] | select(.name == "portatil") | .deviceID')"
+[ -n "$PORTATIL" ]
+R="$(api "/rest/db/completion?folder=copias-cifradas&device=$PORTATIL")"
+if [ "$(printf '%s' "$R" | jq -r '.completion')" = 100 ] && [ "$(printf '%s' "$R" | jq -r '.remoteState')" = valid ]; then
+  printf '{"hora": %s}\n' "$(date +%s)" > "$ESTADO.nuevo"
+  chmod 0644 "$ESTADO.nuevo"
+  mv "$ESTADO.nuevo" "$ESTADO"
+fi

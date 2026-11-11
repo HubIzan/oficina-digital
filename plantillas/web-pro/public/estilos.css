@@ -1,0 +1,40 @@
+/* Base accesible: contraste AA, foco visible, movimiento reducido y modo oscuro. Los colores se cambian aqui. */
+:root {
+  --fondo: #ffffff;
+  --texto: #1b1f2a;
+  --suave: #4a5163;
+  --acento: #1f4fd1;
+  --acento-texto: #ffffff;
+  --borde: #d9dde7;
+  --tarjeta: #f5f7fb;
+  --ancho: 68rem;
+  color-scheme: light dark;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  line-height: 1.6;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --fondo: #10131a; --texto: #e8ebf2; --suave: #aab1c2; --acento: #8fb0ff; --acento-texto: #10131a; --borde: #2b3142; --tarjeta: #171b25; }
+}
+*, *::before, *::after { box-sizing: border-box; }
+body { margin: 0; background: var(--fondo); color: var(--texto); font-size: 1.0625rem; }
+img { max-width: 100%; height: auto; }
+a { color: var(--acento); text-underline-offset: 0.2em; }
+:focus-visible { outline: 3px solid var(--acento); outline-offset: 3px; }
+.saltar { position: absolute; left: -999px; top: 0; padding: 0.5rem 1rem; background: var(--acento); color: var(--acento-texto); }
+.saltar:focus { left: 1rem; }
+.cabecera, .pie, main { max-width: var(--ancho); margin: 0 auto; padding: 1rem 1.25rem; }
+.cabecera { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 1rem; }
+.marca { font-weight: 700; color: var(--texto); text-decoration: none; }
+nav ul { display: flex; flex-wrap: wrap; gap: 1.25rem; margin: 0; padding: 0; list-style: none; }
+.portada { padding: 3rem 0 2rem; }
+h1 { font-size: clamp(2rem, 5vw, 3rem); line-height: 1.15; margin: 0 0 1rem; }
+h2 { margin-top: 3rem; }
+.entradilla { font-size: 1.2rem; color: var(--suave); max-width: 40rem; }
+.boton { display: inline-block; margin-top: 1rem; padding: 0.75rem 1.25rem; border-radius: 0.5rem; background: var(--acento); color: var(--acento-texto); text-decoration: none; font-weight: 600; }
+.tarjetas { display: grid; grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr)); gap: 1rem; }
+.tarjeta { padding: 1.25rem; border: 1px solid var(--borde); border-radius: 0.75rem; background: var(--tarjeta); }
+details { border-bottom: 1px solid var(--borde); padding: 0.75rem 0; }
+summary { cursor: pointer; font-weight: 600; }
+.pie { border-top: 1px solid var(--borde); margin-top: 4rem; color: var(--suave); font-size: 0.95rem; }
+.legal { max-width: 46rem; }
+@media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; scroll-behavior: auto !important; } }

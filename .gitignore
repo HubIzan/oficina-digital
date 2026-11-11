@@ -1,0 +1,8 @@
+node_modules/
+dist/
+target/
+salida/
+venv/
+__pycache__/
+.astro/
+*.log

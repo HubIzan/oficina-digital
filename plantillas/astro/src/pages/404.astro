@@ -1,0 +1,10 @@
+---
+import Base from "../layouts/Base.astro";
+import sitio from "../../sitio.config.json";
+---
+<Base titulo={`Página no encontrada | ${sitio.nombre}`} descripcion="Esta página no existe. Vuelve a la portada para seguir navegando por la web." indexar={false}>
+  <div class="legal">
+    <h1>Esta página no existe</h1>
+    <p><a href="/">Volver a la portada</a></p>
+  </div>
+</Base>

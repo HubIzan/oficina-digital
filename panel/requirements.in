@@ -1,0 +1,6 @@
+fastapi
+uvicorn
+websockets
+markdown-it-py
+nh3
+pillow==13.0.0

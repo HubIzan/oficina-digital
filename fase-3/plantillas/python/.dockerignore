@@ -1,0 +1,7 @@
+.git
+.github
+.env*
+.vercel
+__pycache__
+Dockerfile
+compose.yaml

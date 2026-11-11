@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# Historial local de Oficina/. Nunca sube nada a GitHub.
+#   oficina-boveda historial [ruta]
+#   oficina-boveda ver <commit> <ruta>
+#   oficina-boveda guardar     (lo ejecuta el temporizador)
+set -euo pipefail
+
+MONTAJE=/srv/oficina/boveda
+export GIT_DIR=/var/lib/oficina/boveda.git
+
+case "${1:-}" in
+  guardar)
+    # Sin estas comprobaciones, un montaje caido se guardaria como "borrado todo".
+    mountpoint -q "$MONTAJE" || { echo "Oficina/ no esta montada; no se guarda nada." >&2; exit 1; }
+    cd "$MONTAJE"
+    [ -f Inicio.md ] || { echo "Falta Inicio.md; no se guarda nada." >&2; exit 1; }
+    # Un repositorio anidado podria ejecutar su propia configuracion al consultarlo.
+    ANIDADO="$(find . -name .git -print -quit)"
+    [ -z "$ANIDADO" ] || { echo "Repositorio anidado en $ANIDADO; no se guarda nada." >&2; exit 1; }
+    export GIT_WORK_TREE="$MONTAJE"
+    git add -A
+    if ! git diff --cached --quiet; then
+      git commit -q -m "Guardado automatico $(date '+%Y-%m-%d %H:%M')"
+    fi
+    ;;
+  historial)
+    shift
+    git log --date=format:'%Y-%m-%d %H:%M' --format='%h  %ad  %s' --name-status -- "$@"
+    ;;
+  ver)
+    [ "$#" -eq 3 ] || { echo "Uso: oficina-boveda ver <commit> <ruta>" >&2; exit 2; }
+    git show "$2:$3"
+    ;;
+  *)
+    echo "Uso: oficina-boveda historial [ruta] | ver <commit> <ruta>" >&2
+    exit 2
+    ;;
+esac

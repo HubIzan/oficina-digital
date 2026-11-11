@@ -1,0 +1,622 @@
+#!/usr/bin/env python3
+"""Ejecuta la cola de la Oficina, de una en una, como usuario cola.
+
+No tiene credenciales ni red, y ningun agente puede tocarla: pide cada tarea por un socket a
+oficina-trabajo, que corre como agente. Lo que vuelve por ese socket no es de fiar.
+
+Se detiene sola al acercarse al limite de cuota, y la tarea interrumpida continua la misma
+sesion cuando la cuota se renueva. Nunca sigue si detecta pago por uso.
+"""
+import fcntl
+import hashlib
+import json
+import os
+import re
+import signal
+import socket
+import stat
+import sys
+import time
+import uuid
+from pathlib import Path
+
+RAIZ = Path(os.environ.get("OFICINA_RAIZ", "/srv/oficina"))
+CONTROL = Path(os.environ.get("OFICINA_CONTROL", "/var/lib/oficina/control"))
+SOCKET = os.environ.get("OFICINA_TRABAJO_SOCK", "/run/oficina-trabajo.sock")
+SOCKET_QA = os.environ.get("OFICINA_QA_SOCK", "/run/oficina-qa.sock")
+COLA = RAIZ / "cola"
+REGISTRO = RAIZ / "registro"
+PROYECTOS = RAIZ / "proyectos"
+ESTADO = REGISTRO / "estado.json"
+PAUSA = CONTROL / "pausa"
+LIMITES = {"five_hour": 0.90, "seven_day": 0.70}
+TIEMPO_MAX_S = 3800  # Por encima del limite del trabajo: es el ultimo recurso.
+LOG_MAX = 20 * 1024 * 1024
+MAX_LINEA = 4 * 1024 * 1024
+ESTADOS = ("pendiente", "en-curso", "espera", "revision", "hecha", "fallida")
+RAMA_RE = re.compile(r"^(?:main|agente/[A-Za-z0-9._-]{1,80})\Z")
+SHA_RE = re.compile(rb"^[0-9a-f]{40}\n?\Z")
+CAMPOS_PETICION = ("id", "proyecto", "rol", "rama", "espec", "objetivo", "correcciones", "sesion", "iniciada", "modelo", "sha_antes", "sha_main", "anterior",
+                   "investigacion", "respuestas")
+# Arquitecto y desarrollador pueden acabar pidiendo un dato: la tarea espera tu respuesta en vez de fallar.
+ROLES_PREGUNTA = ("arquitecto", "desarrollador")
+NECESITO_RE = re.compile(r"^NECESITO:\s*(\S.{2,499})\s*$", re.M)
+ROLES_SOLO_LECTURA = ("qa", "triage", "investigador")
+COMPLEJIDADES = ("BAJA", "MEDIA", "ALTA")
+EXISTE = ("si", "parcial", "no")
+RECOMENDACIONES = ("seguir", "seguir_propio", "replantear", "no_merece")
+URL_RE = re.compile(r"^https?://[^\s<>\"'`]{3,300}\Z")
+
+
+# Enrutador de modelos. Solo Claude: la segunda opinion de Gemini va aparte y no escribe.
+MODELOS = {"BAJA": "haiku", "MEDIA": "sonnet", "ALTA": "sonnet"}
+RESPALDO = "haiku"
+# Por debajo de los limites de parada, para reservar cuota antes de tener que pausar.
+UMBRAL_RESPALDO = {"five_hour": 0.80, "seven_day": 0.60}
+# Especificaciones y auditorias no bajan de modelo: son los controles de calidad de la Oficina.
+RESPALDO_EN_ALTA = False
+# Encargos marcados «opus»: solo la especificacion y la revision, donde mas se nota. El desarrollo
+# sigue en Sonnet, que es lo que mas cuota gasta. Con la cuota justa bajan a Sonnet en vez de pausar.
+OPUS = "opus"
+ROLES_OPUS = ("arquitecto", "qa")
+PISTAS_BAJA = re.compile(r"\b(format\w*|lint\w*|typo\w*|ortograf\w*|renombr\w*|comentari\w*|readme|documentaci\w*|estil\w*)\b", re.I)
+PISTAS_ALTA = re.compile(r"\b(segur\w*|autenti\w*|cifr\w*|cript\w*|migra\w*|concurren\w*|arquitect\w*|refactor\w*|vulnerab\w*|audit\w*)\b", re.I)
+
+
+def clasificar(t):
+    """Sin llamar a ningun modelo, para no gastar cuota en decidir cual usar."""
+    if t.get("complejidad") in MODELOS:
+        return t["complejidad"]
+    if t["rol"] in ("arquitecto", "qa", "investigador"):
+        return "ALTA"  # El investigador lee paginas no fiables: con el modelo que mejor resiste engaños.
+    if t["rol"] == "triage":
+        return "MEDIA"  # Una propuesta se puede repetir: con poca cuota, baja de modelo.
+    objetivo = t.get("objetivo") or ""
+    if PISTAS_ALTA.search(objetivo):
+        return "ALTA"
+    if PISTAS_BAJA.search(objetivo):
+        return "BAJA"
+    return "MEDIA"
+
+
+def elegir_modelo(t):
+    complejidad = clasificar(t)
+    modelo = MODELOS[complejidad]
+    cuota = leer_estado().get("cuota", {})
+    alta = any((cuota.get(n) or {}).get("uso", 0) >= u and (cuota.get(n) or {}).get("renueva", 0) > time.time()
+               for n, u in UMBRAL_RESPALDO.items())
+    if t.get("opus") is True and t["rol"] in ROLES_OPUS:
+        return complejidad, (modelo if alta else OPUS), alta
+    respaldo = alta and (complejidad != "ALTA" or RESPALDO_EN_ALTA)
+    return complejidad, (RESPALDO if respaldo else modelo), respaldo
+
+
+class Parar(Exception):
+    """La tarea se detiene sin fallar: volvera a la cola."""
+
+
+class SinRespuesta(RuntimeError):
+    """El trabajo no ha podido terminar: el repositorio puede haber quedado a medias."""
+
+
+def ahora():
+    return time.strftime("%Y-%m-%dT%H:%M:%S%z")
+
+
+def escribir_json(ruta, datos):
+    tmp = ruta.with_name(f".{ruta.name}.{os.getpid()}.tmp")
+    tmp.write_text(json.dumps(datos, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    os.replace(tmp, ruta)
+
+
+def leer_estado():
+    try:
+        e = json.loads(ESTADO.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return e if isinstance(e, dict) else {}
+
+
+def actualizar_estado(**campos):
+    e = leer_estado()
+    e.update(campos, actualizado=ahora())
+    escribir_json(ESTADO, e)
+
+
+def mover(tarea, estado):
+    origen = COLA / tarea["estado"] / f"{tarea['id']}.json"
+    tarea["estado"] = estado
+    tarea["actualizado"] = ahora()
+    destino = COLA / estado / f"{tarea['id']}.json"
+    escribir_json(destino, tarea)
+    if origen != destino:
+        origen.unlink(missing_ok=True)
+
+
+def guardar(tarea):
+    escribir_json(COLA / tarea["estado"] / f"{tarea['id']}.json", tarea)
+
+
+def nueva_tarea(proyecto, rol, objetivo, **extra):
+    marca = time.strftime("%Y%m%d-%H%M%S")
+    t = {
+        "id": f"{marca}-{uuid.uuid4().hex[:4]}",
+        "proyecto": proyecto,
+        "rol": rol,
+        "objetivo": objetivo,
+        "estado": "pendiente",
+        "sesion": str(uuid.uuid4()),
+        "iniciada": False,
+        "intentos": 0,
+        "creada": ahora(),
+        **extra,
+    }
+    guardar(t)
+    return t
+
+
+def motivo_pausa():
+    if PAUSA.exists():
+        return "pausada a mano", None
+    cuota = leer_estado().get("cuota", {})
+    if cuota.get("pago_por_uso"):
+        return "detectado pago por uso: revisa la cuenta y borra la marca", None
+    for nombre, limite in LIMITES.items():
+        v = cuota.get(nombre) or {}
+        if v.get("uso", 0) >= limite and v.get("renueva", 0) > time.time():
+            return f"cuota {nombre} al {round(v['uso'] * 100)} %", v["renueva"]
+    return None, None
+
+
+def abrir_sin_enlaces(raiz, partes):
+    """Abre un archivo sin seguir enlaces en ningun tramo de la ruta. Devuelve None si no se puede."""
+    fd = None
+    try:
+        fd = os.open(raiz, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        for i, parte in enumerate(partes):
+            flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC
+            if i < len(partes) - 1:
+                flags |= os.O_DIRECTORY
+            nuevo = os.open(parte, flags, dir_fd=fd)
+            os.close(fd)
+            fd = nuevo
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            os.close(fd)
+            return None
+        return fd
+    except OSError:
+        if fd is not None:
+            os.close(fd)
+        return None
+
+
+def leer_archivo(raiz, partes, maximo):
+    fd = abrir_sin_enlaces(raiz, partes)
+    if fd is None:
+        return None
+    with os.fdopen(fd, "rb") as f:
+        datos = f.read(maximo + 1)
+    return datos if len(datos) <= maximo else None
+
+
+def sha_rama(proyecto, rama):
+    """Lee el commit de una rama sin ejecutar Git, que obedeceria a la configuracion del repositorio.
+
+    Si algo no encaja devuelve None y la tarea falla. El merge lo revisa despues Git, con sus
+    propias protecciones: un valor manipulado aqui solo puede hacer que no coincidan.
+    """
+    if not isinstance(rama, str) or not RAMA_RE.match(rama):
+        return None
+    raiz = PROYECTOS / proyecto / ".git"
+    suelta = leer_archivo(raiz, ["refs", "heads", *rama.split("/")], 128)
+    if suelta is not None:
+        return suelta.decode("ascii").strip() if SHA_RE.match(suelta) else None
+    empaquetadas = leer_archivo(raiz, ["packed-refs"], 16 * 1024 * 1024)
+    if empaquetadas is None:
+        return None
+    fin = f" refs/heads/{rama}".encode("ascii")
+    for linea in empaquetadas.split(b"\n"):
+        if linea.endswith(fin) and SHA_RE.match(linea[:40]):
+            return linea[:40].decode("ascii")
+    return None
+
+
+def huella(ruta):
+    return hashlib.sha256(ruta.read_bytes()).hexdigest()
+
+
+def comprobar_antes(t):
+    """Lo que se comprueba aqui ya no depende de lo que diga el lado del agente."""
+    if t["rol"] == "arquitecto":
+        t["nota"] = f"Especificaciones/{t['id']}.md"
+    if t.get("espec"):
+        copia = CONTROL / "specs" / f"{t['espec']}.md"
+        info = json.loads((CONTROL / "specs" / f"{t['espec']}.json").read_text(encoding="utf-8"))
+        if huella(copia) != info["sha256"]:
+            raise RuntimeError("la especificacion aprobada ha cambiado")
+    if t["rol"] == "qa":
+        t["sha_main"] = sha_rama(t["proyecto"], "main")
+        t["sha_antes"] = commit_a_revisar(t)
+        if t.get("sha_entrega") and t["sha_antes"] != t["sha_entrega"]:
+            raise RuntimeError("la rama ha cambiado desde la entrega: QA no la revisa")
+        if not t["sha_antes"] or not t["sha_main"]:
+            raise RuntimeError("no se puede leer el commit que va a revisar QA")
+
+
+def commit_a_revisar(t):
+    """Una rama ilegible hace fallar la tarea. Solo una revision encargada a mano parte de main."""
+    return sha_rama(t["proyecto"], "main" if t.get("rama_nueva") else t["rama"])
+
+
+def numero(v):
+    return v if isinstance(v, (int, float)) and not isinstance(v, bool) else 0
+
+
+def conectar(t):
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    for intento in range(10):
+        try:
+            s.connect(SOCKET_QA if t["rol"] in ROLES_SOLO_LECTURA else SOCKET)
+            return s
+        except OSError:
+            if intento == 9:
+                s.close()
+                raise SinRespuesta("no se puede hablar con el servicio de trabajo") from None
+            time.sleep(1)
+    raise SinRespuesta("no se puede hablar con el servicio de trabajo")
+
+
+def peticion(t, accion):
+    d = {k: t.get(k) for k in CAMPOS_PETICION}
+    d["accion"] = accion
+    return json.dumps(d, ensure_ascii=False).encode("utf-8") + b"\n"
+
+
+def ejecutar_trabajo(t):
+    t["complejidad_efectiva"], t["modelo"], t["en_respaldo"] = elegir_modelo(t)
+    guardar(t)
+    s = conectar(t)
+
+    def cortar(*_):
+        try:
+            s.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
+
+    resultado, parada, control, escrito = None, None, None, 0
+    signal.signal(signal.SIGALRM, cortar)
+    signal.alarm(TIEMPO_MAX_S)
+    try:
+        s.sendall(peticion(t, "trabajar"))
+        with s.makefile("rb") as flujo, open(REGISTRO / f"{t['id']}.jsonl", "ab") as log:
+            while True:
+                linea = flujo.readline(MAX_LINEA)
+                if not linea:
+                    break
+                if escrito < LOG_MAX:
+                    log.write(linea)
+                    log.flush()
+                    escrito += len(linea)
+                try:
+                    ev = json.loads(linea)
+                except (ValueError, RecursionError):
+                    continue
+                if not isinstance(ev, dict):
+                    continue
+                if ev.get("oficina") == "fin":
+                    control = ev
+                    continue
+                # Solo una sesion que ha arrancado de verdad se puede continuar.
+                if ev.get("type") == "system" and ev.get("subtype") == "init":
+                    t["iniciada"] = True
+                    if isinstance(ev.get("model"), str):
+                        # El modelo que Claude confirma, no solo el que se le ha pedido.
+                        t["modelo"] = ev["model"][:80]
+                    guardar(t)
+                motivo = revisar_evento(ev)
+                if motivo and not parada:
+                    parada = motivo
+                    cortar()
+                if ev.get("type") == "result":
+                    resultado = ev
+    finally:
+        signal.alarm(0)
+        s.close()
+    if parada:
+        raise Parar(parada)
+    if resultado is not None:
+        uso = resultado.get("usage") if isinstance(resultado.get("usage"), dict) else {}
+        t["tokens"] = t.get("tokens", 0) + sum(numero(uso.get(k)) for k in ("input_tokens", "output_tokens", "cache_creation_input_tokens"))
+    if resultado is not None and isinstance(resultado.get("result"), str):
+        # Lo que el agente explica al terminar: si la tarea falla, es el motivo que entiende una persona.
+        t["explicacion"] = texto_corto(resultado["result"][-1500:], 1500)
+    if control is None:
+        raise SinRespuesta("el trabajo ha terminado sin avisar")
+    if control.get("ok") is not True:
+        raise RuntimeError(str(control.get("error"))[:1000])
+    texto = resultado.get("result") if resultado is not None else None
+    return texto if isinstance(texto, str) else ""
+
+
+def pedir_limpieza(t):
+    """Si el trabajo murio a medias, vuelve a dejar el repositorio en main."""
+    if t["rol"] in ROLES_SOLO_LECTURA:
+        return  # No han podido tocar el repositorio.
+    with conectar(t) as s:
+        s.settimeout(120)
+        s.sendall(peticion(t, "limpiar"))
+        with s.makefile("rb") as flujo:
+            while True:
+                linea = flujo.readline(MAX_LINEA)
+                if not linea:
+                    raise SinRespuesta("sin respuesta al limpiar")
+                try:
+                    ev = json.loads(linea)
+                except (ValueError, RecursionError):
+                    continue
+                if isinstance(ev, dict) and ev.get("oficina") == "fin":
+                    if ev.get("ok") is not True:
+                        raise RuntimeError(str(ev.get("error"))[:300])
+                    return
+
+
+def revisar_evento(ev):
+    """Devuelve un motivo si hay que detener la tarea."""
+    tipo = ev.get("type")
+    if tipo == "system" and ev.get("subtype") == "init":
+        if ev.get("apiKeySource") not in (None, "none"):
+            marcar_pago()
+            return f"origen de credenciales no permitido: {str(ev.get('apiKeySource'))[:60]}"
+    elif tipo == "system" and ev.get("subtype") == "api_retry":
+        if ev.get("error") == "billing_error":
+            marcar_pago()
+            return "error de facturacion"
+        if ev.get("error") == "rate_limit":
+            return "limite de uso alcanzado"
+    elif tipo == "rate_limit_event":
+        info = ev.get("rate_limit_info") if isinstance(ev.get("rate_limit_info"), dict) else {}
+        ventanas = info.get("unifiedWindows") if isinstance(info.get("unifiedWindows"), dict) else {}
+        cuota = leer_estado().get("cuota", {})
+        for nombre in LIMITES:
+            v = ventanas.get(nombre)
+            if isinstance(v, dict):
+                cuota[nombre] = {"uso": numero(v.get("utilization")), "renueva": numero(v.get("resetsAt"))}
+        cuota["medida"] = time.time()
+        actualizar_estado(cuota=cuota)
+        if info.get("isUsingOverage") or info.get("overageStatus") not in (None, "rejected"):
+            marcar_pago()
+            return "la cuenta permite o usa pago por uso"
+        if info.get("status") == "rejected":
+            return "limite de uso alcanzado"
+        for nombre, limite in LIMITES.items():
+            if (cuota.get(nombre) or {}).get("uso", 0) >= limite:
+                return f"cuota {nombre} por encima del {round(limite * 100)} %"
+    return None
+
+
+def marcar_pago():
+    cuota = leer_estado().get("cuota", {})
+    cuota["pago_por_uso"] = True
+    actualizar_estado(cuota=cuota)
+
+
+def veredicto(texto):
+    m = re.findall(r"^VEREDICTO:\s*(APROBADO|RECHAZADO)\s*$", texto, flags=re.M)
+    return m[-1] if m else None
+
+
+def lista_de_textos(v, cuantos, largo):
+    if not isinstance(v, list):
+        return []
+    return [x[:largo] for x in v if isinstance(x, str) and x.strip()][:cuantos]
+
+
+def objeto_json(texto):
+    """El primer objeto JSON que se pueda leer en la respuesta, o None."""
+    trozos = re.findall(r"```(?:json)?\s*(\{.*?\})\s*```", texto, flags=re.S)
+    candidatos = [texto.strip(), *reversed(trozos)]
+    if "{" in texto and "}" in texto:
+        candidatos.append(texto[texto.index("{"):texto.rindex("}") + 1])
+    for c in candidatos:
+        try:
+            d = json.loads(c)
+        except (ValueError, RecursionError):
+            continue
+        if isinstance(d, dict):
+            return d
+    return None
+
+
+def texto_corto(v, largo):
+    return re.sub(r"[\x00-\x08\x0b-\x1f\x7f]", "", v)[:largo].strip() if isinstance(v, str) else ""
+
+
+def url_valida(v):
+    return v if isinstance(v, str) and URL_RE.match(v) else ""
+
+
+def validar_informe(texto):
+    """El informe del investigador sale de paginas web: solo pasa lo que encaja aqui, recortado.
+
+    Las URL no se abren en ningun sitio: se muestran como texto para que las mire el usuario.
+    """
+    d = objeto_json(texto)
+    if d is None:
+        raise RuntimeError("el investigador no ha devuelto un informe con el formato esperado")
+    resumen = texto_corto(d.get("resumen"), 500)
+    if not resumen or d.get("existe") not in EXISTE or d.get("recomendacion") not in RECOMENDACIONES:
+        raise RuntimeError("al informe del investigador le falta el resumen, si existe o la recomendacion")
+    parecidos = []
+    for p in d.get("parecidos") if isinstance(d.get("parecidos"), list) else []:
+        if isinstance(p, dict) and texto_corto(p.get("nombre"), 100):
+            parecidos.append({
+                "nombre": texto_corto(p.get("nombre"), 100),
+                "url": url_valida(p.get("url")),
+                "que_hace": texto_corto(p.get("que_hace"), 300),
+                "precio": texto_corto(p.get("precio"), 100),
+                "diferencia": texto_corto(p.get("diferencia"), 300),
+            })
+    return {
+        "resumen": resumen,
+        "existe": d["existe"],
+        "parecidos": parecidos[:6],
+        "huecos": [texto_corto(x, 200) for x in lista_de_textos(d.get("huecos"), 6, 400)],
+        "recomendacion": d["recomendacion"],
+        "motivo": texto_corto(d.get("motivo"), 800),
+        "sugerencias": [texto_corto(x, 200) for x in lista_de_textos(d.get("sugerencias"), 6, 400)],
+        "fuentes": [u for u in (url_valida(x) for x in (d.get("fuentes") if isinstance(d.get("fuentes"), list) else [])) if u][:10],
+        "avisos": [texto_corto(x, 200) for x in lista_de_textos(d.get("avisos"), 4, 400)],
+    }
+
+
+def validar_propuesta(texto):
+    """La salida de Triage no se da por buena: solo pasa lo que encaja aqui, recortado."""
+    d = objeto_json(texto)
+    if d is None:
+        raise RuntimeError("Triage no ha devuelto una propuesta con el formato esperado")
+    resumen, objetivo = d.get("resumen"), d.get("objetivo")
+    if not (isinstance(resumen, str) and resumen.strip() and isinstance(objetivo, str) and objetivo.strip()):
+        raise RuntimeError("a la propuesta de Triage le falta el resumen o el objetivo")
+    alternativas = []
+    for a in d.get("alternativas") if isinstance(d.get("alternativas"), list) else []:
+        if isinstance(a, dict) and isinstance(a.get("titulo"), str) and a["titulo"].strip():
+            alternativas.append({
+                "titulo": a["titulo"][:100],
+                "descripcion": a["descripcion"][:500] if isinstance(a.get("descripcion"), str) else "",
+                "complejidad": a["complejidad"] if a.get("complejidad") in COMPLEJIDADES else "MEDIA",
+            })
+    if not alternativas:
+        raise RuntimeError("la propuesta de Triage no tiene alternativas")
+    alternativas = alternativas[:3]
+    recomendada = d.get("recomendada")
+    return {
+        "resumen": resumen[:500],
+        "objetivo": objetivo[:3000],
+        "alcance": lista_de_textos(d.get("alcance"), 8, 200),
+        "fuera": lista_de_textos(d.get("fuera"), 8, 200),
+        "alternativas": alternativas,
+        "recomendada": recomendada if isinstance(recomendada, int) and not isinstance(recomendada, bool) and 0 <= recomendada < len(alternativas) else 0,
+        "riesgos": lista_de_textos(d.get("riesgos"), 6, 200),
+        "pregunta": d["pregunta"][:300] if isinstance(d.get("pregunta"), str) else "",
+    }
+
+
+def necesita(texto):
+    m = NECESITO_RE.findall(texto) if isinstance(texto, str) else []
+    return texto_corto(m[-1], 500) if m else None
+
+
+def concluir(t, texto):
+    t["resultado"] = texto[-4000:]
+    rol = t["rol"]
+    pregunta = necesita(texto) if rol in ROLES_PREGUNTA else None
+    if pregunta:
+        # Lo vera el usuario en la isla; con su respuesta, la tarea vuelve a la cola (oficina responder).
+        t["pregunta"] = pregunta
+        mover(t, "espera")
+        return
+    if rol == "triage":
+        t["propuesta"] = validar_propuesta(texto)
+        mover(t, "espera")
+    elif rol == "investigador":
+        # Espera tu decision: seguir con la especificacion o dejarlo.
+        t["informe"] = validar_informe(texto)
+        mover(t, "espera")
+    elif rol == "arquitecto":
+        mover(t, "espera")
+    elif rol == "desarrollador":
+        # Lo mira la cola por su cuenta: de esto depende que QA revise lo que se entrego.
+        sha = sha_rama(t["proyecto"], t["rama"])
+        if not sha or sha == sha_rama(t["proyecto"], "main"):
+            raise RuntimeError("no hay commits nuevos en la rama")
+        t["sha_entrega"] = sha
+        mover(t, "hecha")
+        nueva_tarea(t["proyecto"], "qa", f"Revisa la rama {t['rama']} frente a la especificacion: {t['objetivo']}",
+                    rama=t["rama"], espec=t.get("espec"), origen=t["id"], rondas=t.get("rondas", 0), sha_entrega=sha,
+                    opus=t.get("opus") is True, respuestas=t.get("respuestas"))
+    elif rol == "qa":
+        sha = commit_a_revisar(t)
+        if not sha or sha != t.get("sha_antes"):
+            raise RuntimeError("la rama ha cambiado durante la revision: el veredicto de QA no vale")
+        v = veredicto(texto)
+        t["sha_qa"] = sha
+        if v == "APROBADO":
+            t["veredicto"] = v
+            mover(t, "revision")
+        elif v == "RECHAZADO":
+            t["veredicto"] = v
+            if t.get("rondas", 0) >= 2:
+                mover(t, "espera")
+            else:
+                mover(t, "hecha")
+                nueva_tarea(t["proyecto"], "desarrollador", t["objetivo"], rama=t["rama"], espec=t.get("espec"),
+                            correcciones=texto[-3000:], rondas=t.get("rondas", 0) + 1, opus=t.get("opus") is True,
+                            respuestas=t.get("respuestas"))
+        else:
+            raise RuntimeError("QA no ha dado un veredicto")
+    else:
+        mover(t, "hecha")
+
+
+def recuperar_interrumpidas():
+    for f in (COLA / "en-curso").glob("*.json"):
+        t = json.loads(f.read_text(encoding="utf-8"))
+        mover(t, "pendiente")
+
+
+def siguiente():
+    tareas = [json.loads(f.read_text(encoding="utf-8")) for f in sorted((COLA / "pendiente").glob("*.json"))]
+    # Quien espera en el chat va primero: la tarea en marcha no se interrumpe, pero la siguiente es la suya.
+    return next((t for t in tareas if t.get("rol") == "triage"), tareas[0] if tareas else None)
+
+
+def trabajar(t):
+    mover(t, "en-curso")
+    actualizar_estado(tarea=t["id"], rol=t["rol"], proyecto=t["proyecto"], fase="trabajando", motivo=None)
+    try:
+        comprobar_antes(t)
+        concluir(t, ejecutar_trabajo(t))
+    except Parar as e:
+        t["detenida"] = str(e)
+        mover(t, "pendiente")
+        actualizar_estado(tarea=None, fase="pausa", motivo=str(e))
+        return False
+    except Exception as e:  # La cola debe seguir viva aunque una tarea falle.
+        t["error"] = str(e)[:1000]
+        t["intentos"] = t.get("intentos", 0) + 1
+        mover(t, "fallida")
+        if isinstance(e, SinRespuesta):
+            try:
+                pedir_limpieza(t)
+            except Exception as e2:  # noqa: BLE001
+                t["error"] += f" | no se pudo volver a main: {e2}"[:300]
+                guardar(t)
+    actualizar_estado(tarea=None, rol=None, proyecto=None, fase="libre")
+    return True
+
+
+def main():
+    os.umask(0o007)
+    for e in ESTADOS:
+        (COLA / e).mkdir(parents=True, exist_ok=True)
+    with open(COLA / ".bloqueo", "a") as bloqueo:
+        try:
+            fcntl.flock(bloqueo, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            return 0
+        recuperar_interrumpidas()
+        while True:
+            motivo, renueva = motivo_pausa()
+            if motivo:
+                actualizar_estado(tarea=None, fase="pausa", motivo=motivo, renueva=renueva)
+                return 0
+            t = siguiente()
+            if t is None:
+                actualizar_estado(tarea=None, rol=None, proyecto=None, fase="libre", motivo=None, renueva=None)
+                return 0
+            if not trabajar(t):
+                return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

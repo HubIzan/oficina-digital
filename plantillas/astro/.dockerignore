@@ -1,0 +1,7 @@
+.git
+.github
+.env*
+.vercel
+node_modules
+Dockerfile
+compose.yaml

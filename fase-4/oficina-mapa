@@ -1,0 +1,138 @@
+#!/usr/bin/env python3
+"""Resume un repositorio en firmas, sin ejecutar nada de el, para ahorrar tokens.
+
+  oficina-mapa <carpeta>            imprime el mapa
+  oficina-mapa --ajustes <carpeta>  imprime los ajustes de Claude que bloquean lo ignorado
+"""
+import ast
+import fnmatch
+import json
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+MAX_SALIDA = 6000
+MAX_ARCHIVO = 256 * 1024
+# Lista fija: un .agentignore del proyecto puede ampliarla, pero nunca reducirla.
+BASE = ("node_modules/", "dist/", "build/", "out/", "coverage/", ".next/", ".venv/", "venv/", "__pycache__/",
+        ".git/", ".vercel/", "*.min.js", "*.min.css", "*.map", "*.lock", "package-lock.json", "*.png", "*.jpg",
+        "*.jpeg", "*.gif", "*.webp", "*.ico", "*.pdf", "*.zip", "*.tar", "*.gz", "*.pyc", "*.log", "*.woff", "*.woff2")
+JS_RE = re.compile(
+    r"^\s*(export\s+(?:default\s+)?(?:async\s+)?(?:function\*?|class|const|let|var)\s+[\w$]+[^\n{=]*"
+    r"|(?:async\s+)?function\*?\s+[\w$]+\s*\([^)\n]*\)"
+    r"|class\s+[\w$]+[^\n{]*)", re.M)
+
+
+def patrones(raiz):
+    extra = []
+    f = raiz / ".agentignore"
+    if f.is_file() and not f.is_symlink() and f.stat().st_size < 16384:
+        for linea in f.read_text(encoding="utf-8", errors="replace").splitlines():
+            linea = linea.strip()
+            # Solo patrones simples. Se descarta lo que pudiera romper una regla de permisos.
+            if linea and not linea.startswith(("#", "!")) and re.fullmatch(r"[\w./*\- ]{1,120}", linea) and ".." not in linea:
+                extra.append(linea.lstrip("/"))
+    return list(BASE) + extra
+
+
+def ignorado(ruta, lista):
+    partes = ruta.split("/")
+    for p in lista:
+        if p.endswith("/"):
+            if p[:-1] in partes[:-1] or ruta.startswith(p):
+                return True
+        elif fnmatch.fnmatch(ruta, p) or fnmatch.fnmatch(partes[-1], p):
+            return True
+    return False
+
+
+def firmas_python(texto):
+    salida = []
+
+    def visitar(cuerpo, sangria):
+        for n in cuerpo:
+            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                pre = "async def" if isinstance(n, ast.AsyncFunctionDef) else "def"
+                ret = f" -> {ast.unparse(n.returns)}" if n.returns else ""
+                salida.append(f"{sangria}{pre} {n.name}({ast.unparse(n.args)}){ret}")
+            elif isinstance(n, ast.ClassDef):
+                bases = ", ".join(ast.unparse(b) for b in n.bases)
+                salida.append(f"{sangria}class {n.name}({bases})" if bases else f"{sangria}class {n.name}")
+                visitar(n.body, sangria + "  ")
+
+    visitar(ast.parse(texto).body, "")
+    return salida
+
+
+def firmas_js(texto):
+    return [re.sub(r"\s+", " ", m.group(1)).strip()[:120] for m in JS_RE.finditer(texto)]
+
+
+def archivos(raiz):
+    r = subprocess.run(["git", "-C", str(raiz), "ls-files", "-z"], capture_output=True, check=True)
+    return sorted(a.decode("utf-8", "replace") for a in r.stdout.split(b"\0") if a)
+
+
+def mapa(raiz):
+    lista = patrones(raiz)
+    lineas = []
+    for rel in archivos(raiz):
+        ruta = raiz / rel
+        if ignorado(rel, lista) or ruta.is_symlink() or not ruta.is_file():
+            continue
+        tam = ruta.stat().st_size
+        if tam > MAX_ARCHIVO:
+            lineas.append(f"{rel} (grande, {tam // 1024} KB)")
+            continue
+        crudo = ruta.read_bytes()
+        if b"\0" in crudo[:4096]:
+            continue
+        texto = crudo.decode("utf-8", "replace")
+        firmas = []
+        try:
+            if rel.endswith(".py"):
+                firmas = firmas_python(texto)
+            elif rel.endswith((".js", ".jsx", ".ts", ".tsx", ".mjs")):
+                firmas = firmas_js(texto)
+        except (SyntaxError, ValueError, RecursionError, MemoryError):
+            firmas = ["(no se ha podido analizar)"]
+        lineas.append(f"{rel} ({texto.count(chr(10))} lineas)")
+        lineas.extend(f"  {f[:160]}" for f in firmas[:40])
+    salida = "\n".join(lineas)
+    if len(salida) > MAX_SALIDA:
+        salida = salida[:MAX_SALIDA].rsplit("\n", 1)[0] + "\n(mapa recortado)"
+    return salida
+
+
+def ajustes(raiz):
+    """Reglas de Claude Code que impiden leer o editar lo ignorado."""
+    base = str(raiz).rstrip("/")
+    reglas = []
+    for p in patrones(raiz):
+        if p.endswith("/"):
+            patron = f"{base}/**/{p}**" if "/" not in p[:-1] else f"{base}/{p}**"
+        elif "/" in p:
+            patron = f"{base}/{p}"
+        else:
+            patron = f"{base}/**/{p}"
+        reglas.append(f"Read(/{patron})")
+    return {"permissions": {"deny": reglas}}
+
+
+def main():
+    a = sys.argv[1:]
+    modo_ajustes = bool(a) and a[0] == "--ajustes"
+    if modo_ajustes:
+        a = a[1:]
+    if len(a) != 1:
+        sys.exit(__doc__)
+    raiz = Path(a[0]).resolve()
+    if modo_ajustes:
+        print(json.dumps(ajustes(raiz), indent=1))
+    else:
+        print(mapa(raiz))
+
+
+if __name__ == "__main__":
+    main()

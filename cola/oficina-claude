@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# Lanzador de Claude Code para la Oficina: se niega a arrancar si algo pudiera desviar el uso de la
+# suscripcion a un pago por uso, y arranca Claude con el entorno vacio, salvo HOME, PATH y LANG.
+# Revisado el 2026-11-10: antes solo prohibia unas variables por su nombre y buscaba «claude» en el PATH.
+set -euo pipefail
+
+CLAUDE=/usr/bin/claude  # De root: ningun agente puede cambiarlo.
+
+# Se siguen rechazando, en vez de quitarlas sin mas: si aparecen, algo esta mal configurado y conviene verlo.
+while IFS='=' read -r -d '' nombre _; do
+  case "$nombre" in
+    ANTHROPIC_*|CLAUDE_CODE_USE_*|CLAUDE_CONFIG_DIR|AWS_BEARER_TOKEN_BEDROCK|OPENAI_API_KEY|GEMINI_API_KEY|GOOGLE_API_KEY)
+      echo "oficina-claude: bloqueado, la variable $nombre esta definida." >&2
+      exit 64 ;;
+  esac
+done < <(env -0)
+
+for a in "$@"; do
+  case "$a" in
+    --bare|--bare=*)
+      echo "oficina-claude: bloqueado, --bare no usa la suscripcion." >&2
+      exit 64 ;;
+  esac
+done
+
+exec env -i HOME="${HOME:-}" PATH=/usr/local/bin:/usr/bin:/bin LANG="${LANG:-C.UTF-8}" "$CLAUDE" "$@"

@@ -1,0 +1,5 @@
+# Lo que los agentes no deben leer, para ahorrar tokens. Amplia la lista fija de oficina-mapa.
+# Un archivo o carpeta por linea, por ejemplo: datos/ o *.csv
+node_modules
+dist
+.astro

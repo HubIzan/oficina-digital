@@ -1,0 +1,19 @@
+{
+  "productName": "Isla IzanLab",
+  "version": "0.1.0",
+  "identifier": "com.izanlab.isla",
+  "build": {
+    "frontendDist": "dist"
+  },
+  "app": {
+    "windows": [],
+    "security": {
+      "csp": null,
+      "capabilities": ["isla-remota"]
+    }
+  },
+  "bundle": {
+    "active": false,
+    "icon": ["icons/icon.ico"]
+  }
+}

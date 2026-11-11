@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+# Oficina Digital - acceso remoto.
+#   oficina-acceso autorizar "ssh-ed25519 AAAA... nombre"   (tu usuario)
+#   oficina-acceso syncthing-id                             (root)
+#   oficina-acceso emparejar <id-del-portatil> [direccion]  (root)
+#   oficina-acceso estado                                   (root)
+set -euo pipefail
+
+CONFIG=/var/lib/syncthing/estado/config.xml
+SOCKET=/run/syncthing/gui.sock
+HERRAMIENTA=/opt/oficina/fase-2/syncthing-config.py
+
+api() {
+  local clave
+  clave="$(python3 "$HERRAMIENTA" apikey "$CONFIG")"
+  curl -fsS --unix-socket "$SOCKET" -H "X-API-Key: $clave" "http://localhost$1"
+}
+
+solo_root() { [ "$(id -u)" -eq 0 ] || { echo "Esta orden se ejecuta como root." >&2; exit 1; }; }
+
+case "${1:-}" in
+  autorizar)
+    [ "$(id -u)" -ne 0 ] || { echo "Ejecutalo con tu usuario, no como root." >&2; exit 1; }
+    [ "$#" -eq 2 ] || { echo 'Uso: oficina-acceso autorizar "ssh-ed25519 AAAA... nombre"' >&2; exit 2; }
+    CLAVE="$2"
+    case "$CLAVE" in
+      ssh-ed25519\ *) ;;
+      *) echo "Pega la clave PUBLICA ed25519: el contenido del archivo .pub." >&2; exit 1 ;;
+    esac
+    printf '%s\n' "$CLAVE" | ssh-keygen -lf - >/dev/null 2>&1 || { echo "La clave no es valida." >&2; exit 1; }
+    install -d -m 0700 "$HOME/.ssh"
+    touch "$HOME/.ssh/authorized_keys"
+    chmod 0600 "$HOME/.ssh/authorized_keys"
+    grep -qxF "$CLAVE" "$HOME/.ssh/authorized_keys" || printf '%s\n' "$CLAVE" >> "$HOME/.ssh/authorized_keys"
+    echo "Clave autorizada."
+    ;;
+  syncthing-id)
+    solo_root
+    python3 "$HERRAMIENTA" id "$CONFIG"
+    ;;
+  emparejar)
+    solo_root
+    [ "$#" -ge 2 ] && [ "$#" -le 3 ] || { echo "Uso: oficina-acceso emparejar <id-del-portatil> [direccion]" >&2; exit 2; }
+    systemctl stop oficina-syncthing.service
+    python3 "$HERRAMIENTA" emparejar "$CONFIG" "$2" "${3:-dynamic}"
+    chown syncthing:syncthing "$CONFIG"
+    systemctl start oficina-syncthing.service
+    echo "Portatil emparejado. Acepta la carpeta Boveda en el portatil."
+    ;;
+  estado)
+    solo_root
+    echo "Tailscale: $(tailscale status --json | jq -r '.BackendState')  IP: $(tailscale ip -4 2>/dev/null || echo ninguna)"
+    echo "Conexiones de Syncthing:"
+    api /rest/system/connections | jq -r '.connections | to_entries[] | "  \(.key[0:7])  conectado=\(.value.connected)  \(.value.address)"'
+    echo "Carpeta Boveda:"
+    api '/rest/db/status?folder=boveda' | jq -r '"  estado=\(.state)  archivos=\(.globalFiles)  pendientes=\(.needFiles)"'
+    ;;
+  *)
+    sed -n '2,6p' "$0" | sed 's/^# //' >&2
+    exit 2
+    ;;
+esac

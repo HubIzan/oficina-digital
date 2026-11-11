@@ -1,0 +1,33 @@
+---
+import Base from "../layouts/Base.astro";
+import sitio from "../../sitio.config.json";
+
+// Datos estructurados: Person para un portfolio; Organization o LocalBusiness para un negocio.
+const datos = {
+  "@context": "https://schema.org",
+  "@type": "Person",
+  name: sitio.titular.nombre,
+  url: sitio.dominio,
+  description: sitio.descripcion,
+};
+---
+<Base titulo="PENDIENTE: título de la portada (10-70 caracteres)" descripcion="PENDIENTE: descripción de la portada entre 50 y 170 caracteres, con lo que buscaría alguien que la necesita." datos={datos}>
+  <section class="portada">
+    <h1>PENDIENTE: titular claro que diga qué ofreces y a quién</h1>
+    <p class="entradilla">PENDIENTE: una o dos frases que respondan a la pregunta que se haría quien llega.</p>
+    <a class="boton" href="#contacto">PENDIENTE: llamada a la acción</a>
+  </section>
+
+  <section id="preguntas" aria-labelledby="titulo-preguntas">
+    <h2 id="titulo-preguntas">Preguntas frecuentes</h2>
+    <details>
+      <summary>PENDIENTE: pregunta real que hace la gente</summary>
+      <p>PENDIENTE: respuesta breve y concreta.</p>
+    </details>
+  </section>
+
+  <section id="contacto" aria-labelledby="titulo-contacto">
+    <h2 id="titulo-contacto">Contacto</h2>
+    <p>Escríbeme a <a href={`mailto:${sitio.titular.email}`}>{sitio.titular.email}</a>.</p>
+  </section>
+</Base>

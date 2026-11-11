@@ -1,0 +1,16 @@
+{
+  "name": "__NOMBRE__",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@12.17.0",
+  "scripts": {
+    "dev": "astro dev",
+    "build": "astro build",
+    "test": "node --test",
+    "publicable": "PUBLICAR=1 node --test"
+  },
+  "dependencies": {
+    "@astrojs/sitemap": "3.7.4",
+    "astro": "7.4.4"
+  }
+}

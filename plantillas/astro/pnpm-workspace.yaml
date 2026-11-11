@@ -1,0 +1,6 @@
+# Defensas contra paquetes envenenados (gusano Shai-Hulud de npm, 2025-2026):
+# - No se instala ninguna version publicada hace menos de 7 dias (en minutos).
+# - Solo esbuild puede ejecutar su script de instalacion: Astro lo necesita. Ningun otro.
+minimumReleaseAge: 10080
+onlyBuiltDependencies:
+  - esbuild

@@ -1,0 +1,108 @@
+#!/usr/bin/env bash
+# Copia de seguridad cifrada de la Oficina.
+#   oficina-copias hacer             hace una copia (la lanza el temporizador)
+#   oficina-copias mantener          borra copias antiguas y comprueba el repositorio
+#   sudo oficina-copias estado       lista las copias
+#   sudo oficina-copias probar       restaura la ultima en una carpeta temporal y la comprueba
+#   sudo oficina-copias clave        muestra la clave, para guardarla fuera de este PC
+set -euo pipefail
+
+DESTINO=/var/lib/oficina-copias/destino
+ESTADO=/var/lib/oficina-copias-estado/ultima.json
+CLAVE=/etc/oficina/copias.key
+HUMANO="$(getent passwd 1000 | cut -d: -f1)"
+CASA="$(getent passwd 1000 | cut -d: -f6)"
+ORIGENES=(/srv/oficina/proyectos /srv/oficina/cola /srv/oficina/registro /var/lib/oficina/boveda.git /var/lib/oficina/control
+          /etc/oficina /opt/oficina /usr/local/bin/oficina /usr/local/bin/oficina-entrega /usr/local/bin/oficina-probar /usr/local/bin/oficina-mapa
+          /usr/local/bin/oficina-claude /usr/local/bin/oficina-boveda /usr/local/bin/oficina-acceso
+          /usr/local/sbin/oficina-panel-acciones /usr/local/sbin/oficina-pruebas /usr/local/sbin/oficina-copias
+          /usr/local/sbin/oficina-cola /usr/local/sbin/oficina-trabajo /usr/local/sbin/oficina-clon /usr/local/sbin/oficina-auditoria /usr/local/sbin/oficina-copias-portatil
+          /etc/systemd/system/oficina-*
+          /etc/cron.deny /etc/claude-code /etc/fstab /etc/wsl.conf "$CASA/.local/state/oficina")
+# La clave no se copia a si misma; lo pesado y reconstruible tampoco. El limite evita que un agente llene el disco.
+EXCLUSIONES=(--exclude "$CLAVE" --exclude node_modules --exclude .venv --exclude venv --exclude dist --exclude .cache --exclude-larger-than 200M)
+
+export RESTIC_REPOSITORY="$DESTINO/repo" RESTIC_PASSWORD_FILE="$CLAVE" RESTIC_CACHE_DIR=/var/cache/oficina-copias
+
+morir() { echo "oficina-copias: $*" >&2; exit 1; }
+# Sin el montaje, la copia acabaria dentro del mismo disco virtual que intenta proteger.
+comprobar_destino() { mountpoint -q "$DESTINO" || morir "la carpeta de Windows no esta montada."; }
+solo_root() { [ "$(id -u)" -eq 0 ] || morir "ejecutalo con sudo."; }
+
+hacer() {
+  comprobar_destino
+  local fuentes=() f
+  for f in "${ORIGENES[@]}"; do [ -e "$f" ] && fuentes+=("$f"); done
+  restic backup --quiet --retry-lock 30m --one-file-system --host oficina --tag auto "${EXCLUSIONES[@]}" "${fuentes[@]}"
+  local t="$ESTADO.nuevo"
+  printf '{"hora": %s}\n' "$(date +%s)" > "$t"
+  chmod 0644 "$t"
+  mv "$t" "$ESTADO"
+}
+
+mantener() {
+  comprobar_destino
+  restic forget --quiet --retry-lock 30m --host oficina --keep-last 8 --keep-daily 14 --keep-weekly 8 --keep-monthly 6 --prune
+  restic check --quiet --retry-lock 30m --read-data-subset=10%
+}
+
+estado() {
+  solo_root
+  comprobar_destino
+  restic snapshots --compact
+  restic stats --mode raw-data 2>/dev/null | grep -E 'Total Size|Snapshots' || true
+}
+
+clave() {
+  solo_root
+  [ -t 1 ] || morir "esta orden necesita una terminal."
+  echo "Guarda esta clave en tu gestor de contrasenas, fuera de este PC."
+  echo "Sin ella, las copias no se pueden abrir. Si la pierdes, nadie puede recuperarlas."
+  echo ""
+  cat "$CLAVE"
+  echo ""
+}
+
+probar() {
+  solo_root
+  comprobar_destino
+  local t fallos=0 repo
+  t="$(mktemp -d /var/tmp/oficina-restaurar.XXXXXX)"
+  chmod 0700 "$t"
+  # Cache nueva: tiene que funcionar solo con el repositorio y la clave, como tras perder el disco.
+  export RESTIC_CACHE_DIR="$t/.cache"
+  trap 'rm -rf "$t"' RETURN
+  restic check --quiet --read-data-subset=100% || { echo "  [FALLO] el repositorio no pasa la comprobacion completa"; fallos=$((fallos + 1)); }
+  restic restore latest --quiet --target "$t/r" || { echo "  [FALLO] no se restaura"; rm -rf "$t"; return 1; }
+  for repo in "$t"/r/srv/oficina/proyectos/*/ "$t/r/var/lib/oficina/boveda.git/"; do
+    if git -c safe.directory='*' -C "$repo" fsck --no-progress >/dev/null 2>&1; then
+      echo "  [ OK ]  repositorio integro: ${repo#"$t/r"}"
+    else
+      echo "  [FALLO] repositorio danado: ${repo#"$t/r"}"; fallos=$((fallos + 1))
+    fi
+  done
+  for f in "$t"/r/var/lib/oficina/control/main/*; do
+    local p; p="$(basename "$f")"
+    if [ "$(cat "$f")" = "$(git -c safe.directory='*' -C "$t/r/srv/oficina/proyectos/$p" rev-parse main)" ]; then
+      echo "  [ OK ]  main aprobado coincide: $p $(cut -c1-7 "$f")"
+    else
+      echo "  [FALLO] main aprobado no coincide: $p"; fallos=$((fallos + 1))
+    fi
+  done
+  for f in var/lib/oficina/control/roles.json etc/oficina/panel.json opt/oficina/panel/backend/main.py usr/local/bin/oficina etc/fstab \
+           usr/local/sbin/oficina-cola usr/local/sbin/oficina-trabajo usr/local/bin/oficina-claude etc/systemd/system/oficina-cola.service etc/cron.deny; do
+    [ -s "$t/r/$f" ] && echo "  [ OK ]  restaurado: /$f" || { echo "  [FALLO] falta: /$f"; fallos=$((fallos + 1)); }
+  done
+  [ ! -e "$t/r$CLAVE" ] && echo "  [ OK ]  la clave no esta dentro de la copia" || { echo "  [FALLO] la clave esta dentro de la copia"; fallos=$((fallos + 1)); }
+  echo "Prueba de restauracion: $fallos fallos."
+  [ "$fallos" -eq 0 ]
+}
+
+case "${1:-}" in
+  hacer) hacer ;;
+  mantener) mantener ;;
+  estado) estado ;;
+  clave) clave ;;
+  probar) probar ;;
+  *) sed -n '2,7p' "$0" | sed 's/^# //' >&2; exit 2 ;;
+esac

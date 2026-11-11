@@ -1,0 +1,136 @@
+#!/usr/bin/python3 -I
+"""Saca un commit exacto de un repositorio que puede estar manipulado, sin obedecer su configuracion.
+
+  oficina-clon <.git de origen> <destino> <sha> [--rama <nombre>] [--main <sha>] [--sin-git]
+
+Un clone normal lee el .git/config de origen. Aqui Git no llega a tocar el origen: se copian solo los
+objetos, como archivos normales y sin seguir enlaces, a un repositorio nuevo con configuracion vacia.
+config, hooks, info, refs/replace y alternates se quedan fuera. El contenido lo garantiza el SHA.
+"""
+import argparse
+import os
+import re
+import shutil
+import stat
+import subprocess
+import sys
+
+SHA_RE = re.compile(r"^[0-9a-f]{40}\Z")
+RAMA_RE = re.compile(r"^(?:main|agente/[A-Za-z0-9._-]{1,80})\Z")
+DIR_RE = re.compile(r"^[0-9a-f]{2}\Z")
+SUELTO_RE = re.compile(r"^[0-9a-f]{38}\Z")
+PACK_RE = re.compile(r"^pack-[0-9a-f]{40,64}\.(?:pack|idx)\Z")
+MAX_TOTAL = 4 * 1024 * 1024 * 1024
+TIEMPO_GIT_S = 600
+ENTORNO = {
+    "PATH": "/usr/bin:/bin", "LANG": "C.UTF-8", "HOME": "/nonexistent", "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": "/dev/null",
+    "GIT_NO_REPLACE_OBJECTS": "1", "GIT_TERMINAL_PROMPT": "0", "GIT_NO_LAZY_FETCH": "1",
+}
+
+
+def morir(texto):
+    sys.exit(f"oficina-clon: {texto}")
+
+
+class Copia:
+    def __init__(self):
+        self.total = 0
+
+    def archivo(self, dir_fd, nombre, destino):
+        """Copia un archivo normal. Un enlace, una tuberia o un dispositivo se ignoran."""
+        try:
+            fd = os.open(nombre, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC, dir_fd=dir_fd)
+        except OSError:
+            return
+        with os.fdopen(fd, "rb") as f:
+            if not stat.S_ISREG(os.fstat(f.fileno()).st_mode):
+                return
+            with open(destino, "xb") as d:
+                while bloque := f.read(1024 * 1024):
+                    self.total += len(bloque)
+                    if self.total > MAX_TOTAL:
+                        morir("el repositorio es demasiado grande.")
+                    d.write(bloque)
+        os.chmod(destino, 0o444)
+
+    def carpeta(self, padre_fd, nombre, destino, patron):
+        try:
+            fd = os.open(nombre, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=padre_fd)
+        except OSError:
+            return
+        try:
+            os.makedirs(destino, exist_ok=True)
+            for n in os.listdir(fd):
+                if patron.match(n):
+                    self.archivo(fd, n, os.path.join(destino, n))
+        finally:
+            os.close(fd)
+
+
+def copiar_objetos(origen, destino):
+    copia = Copia()
+    try:
+        raiz = os.open(origen, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        objetos = os.open("objects", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=raiz)
+    except OSError:
+        morir("no se pueden leer los objetos del repositorio.")
+    with os.scandir(objetos) as entradas:
+        nombres = [e.name for e in entradas if DIR_RE.match(e.name)]
+    for n in nombres:
+        copia.carpeta(objetos, n, os.path.join(destino, ".git", "objects", n), SUELTO_RE)
+    copia.carpeta(objetos, "pack", os.path.join(destino, ".git", "objects", "pack"), PACK_RE)
+    os.close(objetos)
+    os.close(raiz)
+
+
+def git(destino, *args):
+    r = subprocess.run(["git", "-C", destino, *args], env=ENTORNO, stdin=subprocess.DEVNULL, capture_output=True,
+                       text=True, errors="replace", timeout=TIEMPO_GIT_S, check=False)
+    if r.returncode:
+        morir(f"git {args[0]}: {r.stderr.strip()[:300]}")
+    return r.stdout
+
+
+def main():
+    a = argparse.ArgumentParser()
+    a.add_argument("origen")
+    a.add_argument("destino")
+    a.add_argument("sha")
+    a.add_argument("--rama")
+    a.add_argument("--main")
+    a.add_argument("--sin-git", action="store_true")
+    o = a.parse_args()
+    if not SHA_RE.match(o.sha) or (o.main and not SHA_RE.match(o.main)):
+        morir("commit no valido.")
+    if o.rama and not RAMA_RE.match(o.rama):
+        morir("rama no valida.")
+    if os.path.lexists(o.destino):
+        morir("el destino ya existe.")
+    os.makedirs(o.destino, mode=0o700)
+    # Sin plantilla: ni ganchos ni nada que no se haya puesto aqui.
+    r = subprocess.run(["git", "init", "-q", "--template=", "-b", "main", o.destino], env=ENTORNO, stdin=subprocess.DEVNULL,
+                       capture_output=True, text=True, timeout=60, check=False)
+    if r.returncode:
+        morir(f"git init: {r.stderr.strip()[:300]}")
+    copiar_objetos(o.origen, o.destino)
+
+    # --verify-objects vuelve a calcular cada huella: un objeto alterado hace fallar el clon.
+    for sha in filter(None, (o.sha, o.main)):
+        git(o.destino, "rev-list", "--objects", "--verify-objects", "--quiet", sha)
+    if git(o.destino, "cat-file", "-t", o.sha).strip() != "commit":
+        morir("eso no es un commit.")
+    if o.main:
+        git(o.destino, "update-ref", "refs/heads/main", o.main)
+    if o.rama and o.rama != "main":
+        git(o.destino, "update-ref", f"refs/heads/{o.rama}", o.sha)
+        git(o.destino, "checkout", "-q", "-f", o.rama)
+    else:
+        git(o.destino, "checkout", "-q", "-f", "--detach", o.sha)
+    if git(o.destino, "rev-parse", "HEAD").strip() != o.sha:
+        morir("el clon no esta en el commit pedido.")
+    if o.sin_git:
+        shutil.rmtree(os.path.join(o.destino, ".git"))
+
+
+if __name__ == "__main__":
+    main()

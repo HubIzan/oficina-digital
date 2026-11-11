@@ -1,0 +1,676 @@
+#!/usr/bin/env python3
+"""Mando de la Oficina. Se ejecuta con TU usuario.
+
+  oficina estado                         cuota, tarea activa y cola
+  oficina encargar <proyecto> "objetivo" pide una especificacion al Arquitecto. En un proyecto
+                                         nuevo o con --complejidad ALTA, antes se investiga si
+                                         ya existe algo parecido (--investigar / --sin-investigar)
+                                         --opus: especificacion y QA con Opus
+  oficina tarea <proyecto> <rol> "texto" tarea directa (rol: qa o devops)
+                                         ambas admiten --complejidad BAJA|MEDIA|ALTA
+  oficina seguir <id> ["matiz"]          tras la investigacion, sigue con la especificacion
+                                         (para dejarlo: oficina rechazar <id>)
+  oficina ver <id>                       detalle de una tarea
+  oficina aprobar-spec <id>              aprueba una especificacion y encarga el desarrollo
+  oficina aprobar <proyecto> <rama>      revisa y hace merge a main
+  oficina adoptar <proyecto>             da por bueno el main actual
+  oficina cancelar <id>                  retira una tarea pendiente
+  oficina rechazar <id> ["motivo"]       rechaza lo que espera tu aprobacion
+  oficina reintentar <id>                vuelve a poner en cola una tarea fallida
+  oficina responder <id> "respuesta"     da el dato que pidio un agente (NECESITO) o una
+                                         indicacion tras un fallo, y la tarea sigue
+  oficina repetir-qa <id>                encarga otra revision de QA para una rama que ha cambiado
+  oficina roles                          aplica las notas de Oficina/Agentes
+  oficina pausar | reanudar              detiene o reanuda la cola
+  oficina auditar <proyecto> si|no       activa la segunda opinion (envia sus diffs a Google)
+"""
+import contextlib
+import hashlib
+import json
+import os
+import re
+import subprocess
+import sys
+import tempfile
+import time
+import uuid
+from pathlib import Path
+
+# Se pueden cambiar solo para las pruebas: este mando corre con tu usuario, que ya tiene acceso a todo.
+RAIZ = Path(os.environ.get("OFICINA_RAIZ", "/srv/oficina"))
+# Plantillas de proyecto que puede crear el panel. Las de web van con el creador de webs.
+PLANTILLAS = ("python", "web", "web-pro", "astro")
+CONTROL = Path(os.environ.get("OFICINA_CONTROL", "/var/lib/oficina/control"))
+COLA = RAIZ / "cola"
+ESTADO = RAIZ / "registro" / "estado.json"
+BOVEDA = RAIZ / "boveda"
+ESTADOS = ("pendiente", "en-curso", "espera", "revision", "fallida", "hecha")
+ROLES = {
+    "arquitecto": ("Read", "Glob", "Grep", "Write", "Edit"),
+    "desarrollador": ("Read", "Glob", "Grep", "Write", "Edit", "Bash"),
+    "qa": ("Read", "Glob", "Grep", "Write", "Edit", "Bash"),
+    "devops": ("Read", "Glob", "Grep", "Write", "Edit", "Bash"),
+    "triage": ("Read", "Glob", "Grep"),
+    # Solo busca y lee paginas: ningun archivo, ni del proyecto ni del sistema.
+    "investigador": ("WebSearch", "WebFetch"),
+}
+NOMBRE_EXISTE = {"si": "Sí, ya existe", "parcial": "Existe en parte", "no": "No he encontrado nada igual"}
+NOMBRE_RECOMENDACION = {"seguir": "Seguir: aporta algo nuevo", "seguir_propio": "Seguir si quieres el tuyo propio",
+                        "replantear": "Replantearlo antes de seguir", "no_merece": "No merece la pena"}
+NOMBRE = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}\Z")
+
+
+def guardar(ruta, t):
+    """Guarda una tarea sin seguir enlaces, por si el usuario cola estuviese comprometido."""
+    fd, temporal = tempfile.mkstemp(dir=ruta.parent, prefix=".guardando-")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(json.dumps(t, ensure_ascii=False, indent=2) + "\n")
+        os.chmod(temporal, 0o660)
+        os.replace(temporal, ruta)
+    except BaseException:
+        Path(temporal).unlink(missing_ok=True)
+        raise
+
+
+@contextlib.contextmanager
+def pausa_temporal():
+    """Detiene la cola durante un merge, para que ningun agente toque el repositorio a la vez."""
+    pausa = CONTROL / "pausa"
+    ya_estaba = pausa.exists()
+    pausa.touch()
+    try:
+        yield
+    finally:
+        if not ya_estaba:
+            pausa.unlink(missing_ok=True)
+            despertar()
+
+
+def despertar():
+    """Avisa al vigilante de la cola: si no, seguiria apareciendo en pausa hasta su siguiente pasada."""
+    aviso = COLA / "pendiente" / f".despertar-{os.getpid()}"
+    with contextlib.suppress(OSError):
+        aviso.touch()
+        aviso.unlink()
+
+
+def morir(texto):
+    sys.exit(f"oficina: {texto}")
+
+
+def confirmar(frase):
+    # Una aprobacion la da una persona: sin terminal no hay confirmacion posible.
+    if not sys.stdin.isatty():
+        morir("esta orden necesita una terminal para confirmarla.")
+    print(f"\nPara continuar, escribe exactamente: {frase}")
+    if input("> ") != frase:
+        morir("cancelado: no se ha hecho nada.")
+
+
+def leer(ruta):
+    return json.loads(ruta.read_text(encoding="utf-8"))
+
+
+def buscar(id_tarea):
+    if not re.fullmatch(r"[0-9a-f-]+", id_tarea):
+        morir("identificador no valido.")
+    for e in ESTADOS:
+        f = COLA / e / f"{id_tarea}.json"
+        if f.is_symlink():
+            morir("esa tarea es un enlace: no se abre.")
+        if f.is_file():
+            t = leer(f)
+            if not isinstance(t, dict):
+                morir("esa tarea esta mal formada.")
+            return f, t
+    morir(f"no existe la tarea {id_tarea}.")
+
+
+def nueva(proyecto, rol, objetivo, **extra):
+    if not NOMBRE.match(proyecto):
+        morir("nombre de proyecto no valido.")
+    if not (RAIZ / "proyectos" / proyecto / ".git").is_dir():
+        morir(f"no existe el proyecto. Crealo con: oficina-entrega nuevo {proyecto} <python|web>")
+    if not (CONTROL / "roles.json").is_file():
+        morir("aplica antes los roles: oficina roles")
+    id_tarea = f"{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:4]}"
+    t = {
+        "id": id_tarea, "proyecto": proyecto, "rol": rol, "objetivo": objetivo, "estado": "pendiente",
+        "sesion": str(uuid.uuid4()), "iniciada": False, "intentos": 0,
+        "creada": time.strftime("%Y-%m-%dT%H:%M:%S%z"), **extra,
+    }
+    guardar(COLA / "pendiente" / f"{id_tarea}.json", t)
+    return t
+
+
+def lanzar_aviso(t):
+    print(f"Tarea {t['id']} en cola ({t['rol']}, {t['proyecto']}). Empezara en unos minutos.")
+
+
+def estado(_):
+    e = leer(ESTADO) if ESTADO.is_file() else {}
+    cuota = e.get("cuota", {})
+    print(f"Fase: {e.get('fase', 'sin datos')}" + (f" ({e['motivo']})" if e.get("motivo") else ""))
+    if (CONTROL / "pausa").exists():
+        print("Pausada a mano. Para seguir: oficina reanudar")
+    for nombre, etiqueta in (("five_hour", "5 horas"), ("seven_day", "7 dias")):
+        v = cuota.get(nombre)
+        if v:
+            r = time.strftime("%a %H:%M", time.localtime(v.get("renueva", 0)))
+            print(f"Cuota {etiqueta}: {round(v.get('uso', 0) * 100)} %, se renueva {r}")
+    if cuota.get("pago_por_uso"):
+        print("ALERTA: se ha detectado pago por uso. La cola no seguira.")
+    for nombre in ESTADOS[:-1]:
+        for f in sorted((COLA / nombre).glob("*.json")):
+            t = leer(f)
+            modelo = f"{t['modelo']}{' (respaldo)' if t.get('en_respaldo') else ''}" if t.get("modelo") else ""
+            print(f"  [{nombre}] {t['id']}  {t['rol']:<13} {t['proyecto']}  {t.get('rama', '')}  {modelo}  {t.get('error', t.get('veredicto', ''))[:70]}")
+
+
+def complejidad(a):
+    """Quita --complejidad X de los argumentos y la devuelve."""
+    if "--complejidad" not in a:
+        return a, {}
+    i = a.index("--complejidad")
+    valor = a[i + 1].upper() if i + 1 < len(a) else ""
+    if valor not in ("BAJA", "MEDIA", "ALTA"):
+        morir("complejidad: BAJA, MEDIA o ALTA")
+    return a[:i] + a[i + 2:], {"complejidad": valor}
+
+
+def opcion(a, nombre):
+    """Quita una opcion sin valor de los argumentos. Devuelve (argumentos, si estaba)."""
+    return [x for x in a if x != nombre], nombre in a
+
+
+def hay_especificaciones(proyecto):
+    carpeta = BOVEDA / "Proyectos" / proyecto / "Especificaciones"
+    return carpeta.is_dir() and any(carpeta.glob("*.md"))
+
+
+def rol_aplicado(nombre):
+    try:
+        return nombre in leer(CONTROL / "roles.json")
+    except (OSError, ValueError):
+        return False
+
+
+def toca_investigar(proyecto, complejidad_indicada, si, no):
+    """Antes de una idea grande o de un proyecto nuevo: ahi es donde vale la pena saber si ya existe."""
+    if no:
+        return False
+    return si or complejidad_indicada == "ALTA" or not hay_especificaciones(proyecto)
+
+
+def con_opus(opus):
+    """La marca viaja de tarea en tarea; solo la especificacion y QA usan Opus (lo decide la cola)."""
+    return {"opus": True} if opus is True else {}
+
+
+MAX_RESPUESTAS = 5
+MAX_RESPUESTA = 1000
+
+
+def con_respuestas(t):
+    """Lo que el usuario contesto viaja con el encargo: si no, QA rechazaria lo que el dio por bueno."""
+    r = t.get("respuestas")
+    return {"respuestas": r} if isinstance(r, list) and r else {}
+
+
+def aplicar_respuesta(f, t, texto):
+    """Devuelve a la cola una tarea que pidio un dato o que fallo, con tu respuesta. Sin frase: no encarga nada nuevo."""
+    estado = f.parent.name
+    if not ((estado == "espera" and isinstance(t.get("pregunta"), str)) or estado == "fallida"):
+        morir("esa tarea no esta esperando un dato ni ha fallado.")
+    texto = limpio(texto, MAX_RESPUESTA).strip()
+    if not texto:
+        morir("escribe la respuesta.")
+    faltaba = t.get("pregunta") if estado == "espera" else f"Fallo: {t.get('error', '')}"
+    anteriores = t.get("respuestas") if isinstance(t.get("respuestas"), list) else []
+    t["respuestas"] = [*anteriores, {"pregunta": limpio(str(faltaba), MAX_RESPUESTA), "respuesta": texto}][-MAX_RESPUESTAS:]
+    t.pop("pregunta", None)
+    t.pop("error", None)
+    t["estado"] = "pendiente"
+    if estado == "fallida":
+        # Tras un fallo se empieza una sesion nueva; tras una pregunta se continua la misma, que ya tiene el contexto.
+        t.update(sesion=str(uuid.uuid4()), iniciada=False)
+    guardar(COLA / "pendiente" / f.name, t)
+    f.unlink()
+    return t
+
+
+def responder(a):
+    if len(a) != 2:
+        morir('uso: oficina responder <id> "respuesta"')
+    f, t = buscar(a[0])
+    lanzar_aviso(aplicar_respuesta(f, t, a[1]))
+
+
+def encargar(a):
+    a, extra = complejidad(a)
+    a, si = opcion(a, "--investigar")
+    a, no = opcion(a, "--sin-investigar")
+    a, opus = opcion(a, "--opus")
+    if len(a) != 2 or (si and no):
+        morir('uso: oficina encargar <proyecto> "objetivo" [--complejidad BAJA|MEDIA|ALTA] [--investigar|--sin-investigar] [--opus]')
+    # La especificacion siempre usa el modelo avanzado; la indicacion vale para el desarrollo.
+    desarrollo = extra.get("complejidad")
+    if NOMBRE.match(a[0]) and toca_investigar(a[0], desarrollo, si, no):
+        if rol_aplicado("investigador"):
+            t = nueva(a[0], "investigador", a[1], desarrollo=desarrollo, **con_opus(opus))
+            lanzar_aviso(t)
+            print("Antes de la especificacion se investiga si ya existe algo parecido. Despues decides con: "
+                  f"oficina seguir {t['id']}  o  oficina rechazar {t['id']}")
+            return
+        print("Aviso: sin investigar antes, porque falta el rol investigador. Aplicalo con: oficina roles")
+    lanzar_aviso(nueva(a[0], "arquitecto", a[1], desarrollo=desarrollo, **con_opus(opus)))
+
+
+def limpio(v, largo):
+    return re.sub(r"\x1b\[[0-9;?]*[A-Za-z]|[\x00-\x08\x0b-\x1f\x7f]", "", v)[:largo] if isinstance(v, str) else ""
+
+
+def informe_valido(t):
+    """La cola ya lo valido, pero lo escribio a partir de paginas web: se vuelven a mirar los tipos."""
+    i = t.get("informe")
+    if t.get("rol") != "investigador" or not isinstance(i, dict) or not isinstance(i.get("resumen"), str):
+        return None
+    lista = lambda v, n, largo: [limpio(x, largo) for x in v if isinstance(x, str)][:n] if isinstance(v, list) else []  # noqa: E731
+    parecidos = []
+    for p in (i.get("parecidos") if isinstance(i.get("parecidos"), list) else [])[:6]:
+        if isinstance(p, dict) and isinstance(p.get("nombre"), str):
+            parecidos.append({k: limpio(p.get(k), 300) for k in ("nombre", "url", "que_hace", "precio", "diferencia")})
+    return {
+        "resumen": limpio(i["resumen"], 500),
+        "existe": i.get("existe") if i.get("existe") in NOMBRE_EXISTE else "no",
+        "parecidos": parecidos,
+        "huecos": lista(i.get("huecos"), 6, 200),
+        "recomendacion": i.get("recomendacion") if i.get("recomendacion") in NOMBRE_RECOMENDACION else "replantear",
+        "motivo": limpio(i.get("motivo"), 800),
+        "sugerencias": lista(i.get("sugerencias"), 6, 200),
+        "fuentes": lista(i.get("fuentes"), 10, 300),
+        "avisos": lista(i.get("avisos"), 4, 200),
+    }
+
+
+def informe_en_texto(i):
+    """Markdown sencillo: sirve para la terminal y para la nota que queda en la boveda."""
+    partes = [f"**{NOMBRE_EXISTE[i['existe']]}.** {i['resumen']}", "", f"**Recomendacion:** {NOMBRE_RECOMENDACION[i['recomendacion']]}"]
+    if i["motivo"]:
+        partes.append(i["motivo"])
+    if i["parecidos"]:
+        partes += ["", "## Lo que ya existe"]
+        for p in i["parecidos"]:
+            extra = " · ".join(x for x in (p["precio"], p["url"]) if x)
+            partes.append(f"- **{p['nombre']}**{f' ({extra})' if extra else ''}: {p['que_hace']}" + (f" Diferencia: {p['diferencia']}" if p["diferencia"] else ""))
+    for titulo, clave in (("Huecos que nadie cubre", "huecos"), ("Sugerencias para el encargo", "sugerencias"), ("Avisos del investigador", "avisos")):
+        if i[clave]:
+            partes += ["", f"## {titulo}", *(f"- {x}" for x in i[clave])]
+    if i["fuentes"]:
+        partes += ["", "## Fuentes (sin abrir: miralas tu si quieres)", *(f"- {u}" for u in i["fuentes"])]
+    return "\n".join(partes)
+
+
+def aplicar_seguir(f, t, matiz=""):
+    """Encarga la especificacion con lo investigado. La confirmacion ya esta hecha."""
+    i = informe_valido(t)
+    if i is None:
+        morir("esa investigacion no tiene un informe valido.")
+    objetivo = t["objetivo"] + (f"\n\nMatiz del usuario tras la investigacion: {matiz}" if matiz else "")
+    d = nueva(t["proyecto"], "arquitecto", objetivo, desarrollo=t.get("desarrollo"), investigacion=i, origen=t["id"],
+              **con_opus(t.get("opus")))
+    t.update(estado="hecha", encargo=d["id"])
+    guardar(COLA / "hecha" / f.name, t)
+    f.unlink()
+    # Queda constancia en la boveda; si no se puede escribir, el encargo sigue valiendo.
+    with contextlib.suppress(OSError):
+        escribir_en_boveda(("Proyectos", t["proyecto"], "Investigacion"), f"{t['id']}.md", (
+            f"# Investigacion previa\n\n**Idea:** {limpio(t['objetivo'], 3000)}\n\n{informe_en_texto(i)}\n\n"
+            f"Decision: seguir ({time.strftime('%Y-%m-%d %H:%M')}), especificacion {d['id']}.\n").encode("utf-8"))
+    return d
+
+
+def abrir_en_boveda(partes, crear=True):
+    """Abre una carpeta de la boveda sin seguir enlaces en ningun tramo. Devuelve su descriptor.
+
+    Las carpetas de la boveda las puede tocar agente: un enlace plantado en ellas no debe llevar lo que
+    escribe tu usuario a otra parte.
+    """
+    fd = os.open(BOVEDA, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    try:
+        for parte in partes:
+            if not isinstance(parte, str) or parte in ("", ".", "..") or "/" in parte or "\0" in parte:
+                raise OSError("ruta no valida en la boveda")
+            if crear:
+                with contextlib.suppress(FileExistsError):
+                    os.mkdir(parte, 0o770, dir_fd=fd)
+            nuevo = os.open(parte, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=fd)
+            os.close(fd)
+            fd = nuevo
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd
+
+
+def escribir_en_boveda(partes, nombre, datos, nuevo=False):
+    """Escribe un archivo en la boveda sin seguir enlaces. nuevo=True: falla si ya existe."""
+    if not isinstance(nombre, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._ -]{0,120}", nombre) or ".." in nombre:
+        raise OSError("nombre de archivo no valido")
+    fd = abrir_en_boveda(partes)
+    try:
+        banderas = os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC | (os.O_EXCL if nuevo else os.O_TRUNC)
+        archivo = os.open(nombre, banderas, 0o660, dir_fd=fd)
+        with os.fdopen(archivo, "wb") as s:
+            s.write(datos)
+    finally:
+        os.close(fd)
+
+
+def seguir(a):
+    if len(a) not in (1, 2):
+        morir('uso: oficina seguir <id> ["matiz"]')
+    f, t = buscar(a[0])
+    if t.get("rol") != "investigador" or f.parent.name != "espera":
+        morir("esa tarea no es una investigacion pendiente.")
+    i = informe_valido(t)
+    if i is None:
+        morir("esa investigacion no tiene un informe valido: rechazala y vuelve a encargar.")
+    print(informe_en_texto(i))
+    print("-" * 60)
+    print("Este informe sale de paginas web: puede equivocarse o traer instrucciones escondidas. Decides tu.")
+    confirmar(f"seguir {t['proyecto']}")
+    lanzar_aviso(aplicar_seguir(f, t, limpio(a[1], 1000) if len(a) == 2 else ""))
+
+
+def tarea(a):
+    a, extra = complejidad(a)
+    if len(a) != 3 or a[1] not in ("qa", "devops"):
+        morir('uso: oficina tarea <proyecto> <qa|devops> "texto" [--complejidad BAJA|MEDIA|ALTA]')
+    id_rama = f"agente/{a[1]}-{time.strftime('%Y%m%d-%H%M%S')}"
+    # QA no crea ramas: una revision encargada a mano parte de main.
+    if a[1] == "qa":
+        extra["rama_nueva"] = True
+    lanzar_aviso(nueva(a[0], a[1], a[2], rama=id_rama, **extra))
+
+
+def ver(a):
+    if len(a) != 1:
+        morir("uso: oficina ver <id>")
+    _, t = buscar(a[0])
+    print(json.dumps({k: v for k, v in t.items() if k != "sesion"}, ensure_ascii=False, indent=2))
+    print("\nEste resumen lo escribe la cola o el propio agente: compruebalo con el diff.")
+
+
+def aprobar_spec(a):
+    if len(a) != 1:
+        morir("uso: oficina aprobar-spec <id>")
+    f, t = buscar(a[0])
+    if t["rol"] != "arquitecto" or t["estado"] != "espera":
+        morir("esa tarea no es una especificacion pendiente.")
+    nota = BOVEDA / "Proyectos" / t["proyecto"] / t["nota"]
+    contenido = nota.read_bytes()
+    texto = contenido.decode("utf-8", errors="replace")
+    print(re.sub(r"\x1b\[[0-9;?]*[A-Za-z]|[\x00-\x08\x0b-\x1f\x7f]", "", texto))
+    print("-" * 60)
+    print("Aprobar autoriza instalar las dependencias que lista, dentro del contenedor")
+    print("del proyecto y solo desde PyPI o npmjs. Esta copia sera la unica valida.")
+    confirmar(f"aprobar spec {t['proyecto']}")
+    aplicar_spec(f, t, contenido)
+
+
+def aplicar_spec(f, t, contenido):
+    """Fija la copia aprobada y encarga el desarrollo. La confirmacion ya esta hecha."""
+    specs = CONTROL / "specs"
+    specs.mkdir(mode=0o755, exist_ok=True)
+    copia = specs / f"{t['id']}.md"
+    # La copia refleja la aprobacion: si siguiera en borrador, el Desarrollador se detendria.
+    contenido = re.sub(rb"(?m)^estado:[ \t]*\w+[ \t]*$", b"estado: aprobada", contenido, count=1)
+    copia.write_bytes(contenido)
+    copia.chmod(0o644)
+    info = specs / f"{t['id']}.json"
+    info.write_text(json.dumps({
+        "sha256": hashlib.sha256(contenido).hexdigest(), "proyecto": t["proyecto"],
+        "aprobada": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+    }, indent=2) + "\n", encoding="utf-8")
+    info.chmod(0o644)
+    indicada = {"complejidad": t["desarrollo"]} if t.get("desarrollo") else {}
+    d = nueva(t["proyecto"], "desarrollador", t["objetivo"], rama=f"agente/{t['id']}", espec=t["id"], rondas=0, **indicada,
+              **con_opus(t.get("opus")), **con_respuestas(t))
+    t["estado"] = "hecha"
+    guardar(COLA / "hecha" / f.name, t)
+    f.unlink()
+    lanzar_aviso(d)
+
+
+def aprobar(a):
+    if len(a) != 2:
+        morir("uso: oficina aprobar <proyecto> <rama>")
+    with pausa_temporal():
+        comprobar_sin_tarea()
+        sha = comprobar_qa(a[0], a[1])
+        # Con QA, el merge se ata a ese commit exacto, aunque la rama cambiase despues.
+        r = subprocess.run(["oficina-entrega", "aprobar", a[0], a[1], *([sha] if sha else [])])
+        if r.returncode:
+            sys.exit(r.returncode)
+        cerrar_revision(a[0], a[1])
+
+
+def qa_aprobo(t, sha):
+    """El veredicto vale solo para el commit que QA tuvo delante."""
+    return t.get("veredicto") == "APROBADO" and isinstance(t.get("sha_qa"), str) and t["sha_qa"] == sha
+
+
+def tareas_en_revision(proyecto, rama):
+    tareas = []
+    for f in sorted((COLA / "revision").glob("*.json")):
+        if f.is_symlink():
+            continue
+        try:
+            t = leer(f)
+        except ValueError:
+            continue
+        if isinstance(t, dict) and t.get("proyecto") == proyecto and t.get("rama") == rama:
+            tareas.append(t)
+    return tareas
+
+
+def comprobar_qa(proyecto, rama):
+    """Devuelve el commit aprobado, o None si la rama nunca paso por la cola."""
+    tareas = tareas_en_revision(proyecto, rama)
+    if not tareas:
+        print("ATENCION: esta rama no ha pasado por QA en la cola. Revisala con el diff.")
+        return None
+    if subprocess.run(["oficina-entrega", "revisar", proyecto]).returncode:
+        sys.exit(1)
+    r = subprocess.run(["git", "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "-C", str(RAIZ / "proyectos" / proyecto),
+                        "rev-parse", "--verify", f"refs/heads/{rama}^{{commit}}"],
+                       capture_output=True, text=True, check=False, env={**os.environ, "GIT_NO_REPLACE_OBJECTS": "1"})
+    sha = r.stdout.strip()
+    if r.returncode or not re.fullmatch(r"[0-9a-f]{40}", sha):
+        morir(f"no se puede leer la rama {rama}.")
+    if not any(qa_aprobo(t, sha) for t in tareas):
+        morir(f"QA no ha aprobado este commit ({sha[:7]}). Para repetir la revision: oficina repetir-qa {tareas[-1]['id']}")
+    return sha
+
+
+def comprobar_sin_tarea():
+    e = leer(ESTADO) if ESTADO.is_file() else {}
+    if e.get("tarea") or list((COLA / "en-curso").glob("*.json")):
+        morir("hay una tarea en marcha: espera a que termine o usa oficina pausar.")
+
+
+def cerrar_revision(proyecto, rama):
+    for f in (COLA / "revision").glob("*.json"):
+        if f.is_symlink():
+            continue
+        try:
+            t = leer(f)
+        except ValueError:
+            continue
+        if isinstance(t, dict) and t.get("proyecto") == proyecto and t.get("rama") == rama:
+            t["estado"] = "hecha"
+            guardar(COLA / "hecha" / f.name, t)
+            f.unlink()
+
+
+def adoptar(a):
+    if len(a) != 1:
+        morir("uso: oficina adoptar <proyecto>")
+    sys.exit(subprocess.run(["oficina-entrega", "adoptar", a[0]]).returncode)
+
+
+def cancelar(a):
+    if len(a) != 1:
+        morir("uso: oficina cancelar <id>")
+    f, t = buscar(a[0])
+    if t["estado"] not in ("pendiente", "espera", "fallida"):
+        morir("solo se cancelan tareas pendientes, en espera o fallidas.")
+    t["estado"] = "hecha"
+    t["cancelada"] = True
+    guardar(COLA / "hecha" / f.name, t)
+    f.unlink()
+    print("Tarea cancelada.")
+
+
+def rechazar(a):
+    if len(a) not in (1, 2):
+        morir('uso: oficina rechazar <id> ["motivo"]')
+    f, t = buscar(a[0])
+    aplicar_rechazo(f, t, a[1] if len(a) == 2 else "")
+    print("Tarea rechazada. La rama, si la hay, se conserva y no entra en main.")
+
+
+def aplicar_rechazo(f, t, motivo):
+    """Retira lo que esperaba tu decision. No encarga trabajo nuevo: eso gastaria cuota."""
+    if f.parent.name not in ("espera", "revision"):
+        morir("solo se rechaza lo que espera tu aprobacion.")
+    t.update(estado="hecha", cancelada=True, rechazada=True, motivo_rechazo=motivo[:300])
+    guardar(COLA / "hecha" / f.name, t)
+    f.unlink()
+
+
+def reintentar(a):
+    if len(a) != 1:
+        morir("uso: oficina reintentar <id>")
+    f, t = buscar(a[0])
+    if t["estado"] != "fallida":
+        morir("solo se reintentan tareas fallidas.")
+    t.update(estado="pendiente", sesion=str(uuid.uuid4()), iniciada=False)
+    t.pop("error", None)
+    guardar(COLA / "pendiente" / f.name, t)
+    f.unlink()
+    lanzar_aviso(t)
+
+
+def repetir_qa(a):
+    if len(a) != 1:
+        morir("uso: oficina repetir-qa <id>")
+    f, t = buscar(a[0])
+    if f.parent.name != "revision":
+        morir("solo se repite QA de lo que espera tu merge.")
+    q = nueva(t["proyecto"], "qa", t["objetivo"], rama=t["rama"], espec=t.get("espec"), origen=t["id"], rondas=t.get("rondas", 0),
+              **con_opus(t.get("opus")), **con_respuestas(t))
+    t.update(estado="hecha", cancelada=True, motivo_rechazo="QA repetido")
+    guardar(COLA / "hecha" / f.name, t)
+    f.unlink()
+    lanzar_aviso(q)
+
+
+def frontmatter(texto):
+    m = re.match(r"^---\n(.*?)\n---\n(.*)$", texto, flags=re.S)
+    if not m:
+        return None, None
+    campos = {}
+    for linea in m.group(1).splitlines():
+        if ":" in linea:
+            k, v = linea.split(":", 1)
+            campos[k.strip()] = v.strip()
+    return campos, m.group(2).strip()
+
+
+def roles(_):
+    # Las notas viven donde agente puede escribir: aqui se revisan y se fija una copia que no puede tocar.
+    resultado = {}
+    for nombre, permitidas in ROLES.items():
+        nota = BOVEDA / "Agentes" / f"{nombre}.md"
+        if not nota.is_file():
+            morir(f"falta la nota {nota}")
+        campos, cuerpo = frontmatter(nota.read_text(encoding="utf-8"))
+        if not campos or not cuerpo:
+            morir(f"nota mal formada: {nota}")
+        herramientas = [h.strip() for h in campos.get("herramientas", "").split(",") if h.strip()]
+        ajenas = set(herramientas) - set(permitidas)
+        if ajenas or not herramientas:
+            morir(f"{nombre}: herramientas no permitidas: {sorted(ajenas) or 'ninguna indicada'}")
+        resultado[nombre] = {
+            "description": campos.get("descripcion", nombre),
+            "prompt": cuerpo,
+            "tools": herramientas,
+            "model": campos.get("modelo", "sonnet"),
+        }
+    destino = CONTROL / "roles.json"
+    anterior = leer(destino) if destino.is_file() else {}
+    if anterior == resultado:
+        print("Los roles ya estan aplicados.")
+        return
+    for nombre, r in resultado.items():
+        cambio = "sin cambios" if anterior.get(nombre) == r else "CAMBIA"
+        print(f"\n== {nombre} ({cambio}): modelo {r['model']}, herramientas {', '.join(r['tools'])}")
+        if cambio == "CAMBIA":
+            print(r["prompt"])
+    confirmar("aplicar roles")
+    destino.write_text(json.dumps(resultado, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    destino.chmod(0o644)
+    print("Roles aplicados.")
+
+
+def auditar(a):
+    if len(a) != 2 or a[1] not in ("si", "no") or not NOMBRE.match(a[0]):
+        morir("uso: oficina auditar <proyecto> si|no")
+    ruta = CONTROL / "auditoria.json"
+    c = leer(ruta) if ruta.is_file() else {"proyectos": []}
+    proyectos = [p for p in c.get("proyectos", []) if p != a[0]]
+    if a[1] == "si":
+        if not (RAIZ / "proyectos" / a[0] / ".git").is_dir():
+            morir("no existe ese proyecto.")
+        print("Los diffs de este proyecto se enviaran a Google (Antigravity) para una segunda opinion.")
+        print("Sus terminos permiten usarlos para mejorar sus productos, salvo que lo desactives en tus ajustes.")
+        confirmar(f"enviar a google {a[0]}")
+        proyectos.append(a[0])
+    c["proyectos"] = proyectos
+    ruta.write_text(json.dumps(c, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    ruta.chmod(0o644)
+    print(f"Segunda opinion en {a[0]}: {a[1]}.")
+
+
+def pausar(_):
+    (CONTROL / "pausa").touch()
+    print("Cola en pausa. La tarea en marcha, si la hay, terminara antes de parar.")
+
+
+def reanudar(_):
+    (CONTROL / "pausa").unlink(missing_ok=True)
+    despertar()
+    print("Cola reanudada.")
+
+
+ORDENES = {
+    "estado": estado, "encargar": encargar, "tarea": tarea, "ver": ver, "aprobar-spec": aprobar_spec, "seguir": seguir,
+    "aprobar": aprobar, "adoptar": adoptar, "cancelar": cancelar, "rechazar": rechazar, "reintentar": reintentar, "responder": responder, "repetir-qa": repetir_qa, "roles": roles,
+    "pausar": pausar, "reanudar": reanudar, "auditar": auditar,
+}
+
+
+def main():
+    if os.geteuid() == 0 or os.environ.get("USER") == "agente":
+        morir("ejecutalo con tu usuario.")
+    if len(sys.argv) < 2 or sys.argv[1] not in ORDENES:
+        print(__doc__)
+        sys.exit(2)
+    ORDENES[sys.argv[1]](sys.argv[2:])
+
+
+if __name__ == "__main__":
+    main()

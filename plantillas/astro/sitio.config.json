@@ -1,0 +1,13 @@
+{
+  "nombre": "__NOMBRE__",
+  "descripcion": "PENDIENTE",
+  "dominio": "https://sin-dominio.invalid",
+  "idioma": "es",
+  "modo": "personal",
+  "titular": {
+    "nombre": "PENDIENTE",
+    "nif": "",
+    "domicilio": "",
+    "email": "PENDIENTE@example.com"
+  }
+}

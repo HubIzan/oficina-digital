@@ -1,0 +1,364 @@
+#!/usr/bin/env bash
+# Oficina Digital - entrega de proyectos. Se ejecuta con TU usuario.
+#   oficina-entrega nuevo <proyecto> <python|web>   crea el proyecto en local
+#   oficina-entrega probar <proyecto>               ejecuta los tests en Docker
+#   oficina-entrega subir <proyecto>                sube main a GitHub (pide confirmacion)
+#   oficina-entrega pages <proyecto>                publica en GitHub Pages (pide confirmacion)
+#   oficina-entrega vercel <proyecto>               publica en Vercel (pide confirmacion)
+#   oficina-entrega vercel-login                    inicia sesion en Vercel
+#   oficina-entrega aprobar <proyecto> <rama>       revisa y hace merge a main (pide confirmacion)
+#   oficina-entrega adoptar <proyecto>              da por bueno el main actual (pide confirmacion)
+set -euo pipefail
+
+# Solo cambian en las pruebas: esto corre con tu usuario, que ya tiene acceso a todo.
+PROYECTOS="${OFICINA_PROYECTOS:-/srv/oficina/proyectos}"
+PLANTILLAS="${OFICINA_PLANTILLAS:-/opt/oficina/plantillas}"
+VERSION_VERCEL=65.11.0
+IMAGEN_VERCEL="oficina-vercel:$VERSION_VERCEL"
+IMAGEN_GITLEAKS=zricethezav/gitleaks:v8.30.1
+SESION_VERCEL="$HOME/.oficina-vercel"
+REGISTRO="$HOME/.local/state/oficina/entregas.log"
+CONTROL="${OFICINA_CONTROL:-/var/lib/oficina/control}"
+
+# Los repositorios son escribibles por agente: Git no debe ejecutar nada de ellos.
+GIT=(git -c core.hooksPath=/dev/null -c core.fsmonitor=false -c protocol.ext.allow=never -c protocol.file.allow=never)
+# git replace haria que el diff y el merge viesen un contenido distinto del que se sube.
+export GIT_NO_REPLACE_OBJECTS=1 GIT_NO_LAZY_FETCH=1 GIT_TERMINAL_PROMPT=0
+
+morir() { echo "oficina-entrega: $*" >&2; exit 1; }
+aviso() { printf '==> %s\n' "$*"; }
+registrar() {
+  install -d -m 0700 "$(dirname "$REGISTRO")"
+  printf '%s %s\n' "$(date -Is)" "$*" >> "$REGISTRO"
+}
+
+comprobar_usuario() {
+  [ "$(id -u)" -ne 0 ] || morir "ejecutalo con tu usuario, no como root."
+  [ "$(id -un)" != agente ] || morir "agente no puede hacer entregas."
+}
+
+ruta_proyecto() {
+  [[ "$1" =~ ^[a-z0-9][a-z0-9-]{0,62}$ ]] || morir "nombre no valido: usa minusculas, numeros y guiones."
+  printf '%s/%s' "$PROYECTOS" "$1"
+}
+
+confirmar() {
+  # Una aprobacion la da una persona: sin terminal no hay confirmacion posible.
+  [ -t 0 ] || morir "esta orden necesita una terminal para confirmarla."
+  local frase="$1" respuesta
+  printf '\nPara continuar, escribe exactamente: %s\n> ' "$frase"
+  IFS= read -r respuesta
+  [ "$respuesta" = "$frase" ] || morir "cancelado: no se ha hecho nada."
+}
+
+revisar_repo() {
+  local p="$1" clave
+  [ ! -L "$p" ] && [ -d "$p/.git" ] && [ ! -L "$p/.git" ] && [ -f "$p/.git/config" ] && [ ! -L "$p/.git/config" ] || morir "$p no es un repositorio normal."
+  # Estos archivos cambian de donde lee Git su configuracion, sus objetos o sus atributos.
+  # commondir, por ejemplo, saltaria la revision de .git/config y permitiria ejecutar filtros.
+  local extra
+  for extra in commondir gitdir config.worktree worktrees shallow objects/info/alternates objects/info/http-alternates info/grafts info/attributes; do
+    [ ! -e "$p/.git/$extra" ] && [ ! -L "$p/.git/$extra" ] || morir "ajuste de Git no permitido en el repositorio: .git/$extra"
+  done
+  [ -z "$(find "$p/.git/refs/replace" -mindepth 1 ! -type d -print -quit 2>/dev/null)" ] || morir "ajuste de Git no permitido en el repositorio: refs/replace"
+  [ -z "$(find "$p/.git" -type l -print -quit)" ] || morir "ajuste de Git no permitido en el repositorio: enlace dentro de .git"
+  ! grep -q ' refs/replace/' "$p/.git/packed-refs" 2>/dev/null || morir "ajuste de Git no permitido en el repositorio: refs/replace"
+  while IFS= read -r clave; do
+    [[ "$clave" =~ ^core\.(repositoryformatversion|filemode|bare|logallrefupdates|sharedrepository|ignorecase|precomposeunicode)$ ]] && continue
+    [[ "$clave" == receive.denynonfastforwards ]] && continue
+    [[ "$clave" =~ ^remote\.origin\.(url|fetch)$ ]] && continue
+    [[ "$clave" =~ ^branch\.[A-Za-z0-9._/-]+\.(remote|merge)$ ]] && continue
+    [[ "$clave" =~ ^user\.(name|email)$ ]] && continue
+    morir "ajuste de Git no permitido en el repositorio: $clave"
+  done < <(git config --file "$p/.git/config" --name-only --list)
+  [ -z "$(find "$p" -mindepth 2 -name .git -print -quit)" ] || morir "hay un repositorio dentro del proyecto."
+  ! "${GIT[@]}" -C "$p" ls-files -s | grep -q '^160000' || morir "el proyecto usa submodulos; revisalo antes."
+}
+
+# Agente puede mover main en su copia. Solo vale el commit que TU has aprobado.
+guardar_aprobado() {
+  install -d -m 0755 "$CONTROL/main"
+  "${GIT[@]}" -C "$2" rev-parse main > "$CONTROL/main/$1"
+  chmod 0644 "$CONTROL/main/$1"
+}
+
+comprobar_aprobado() {
+  local nombre="$1" p="$2" aprobado
+  [ -f "$CONTROL/main/$nombre" ] || morir "main de $nombre sin aprobar; revisalo y usa: oficina adoptar $nombre"
+  aprobado="$(cat "$CONTROL/main/$nombre")"
+  [ "$("${GIT[@]}" -C "$p" rev-parse main)" = "$aprobado" ] \
+    || morir "main ha cambiado sin tu aprobacion; revisalo y usa: oficina adoptar $nombre"
+}
+
+comprobar_dockerfile() {
+  # "# syntax=" haria que Docker ejecutase un constructor elegido por el proyecto.
+  [ -f "$1/Dockerfile" ] && [ ! -L "$1/Dockerfile" ] || morir "no hay un Dockerfile normal."
+  ! grep -qiE '^[[:space:]]*#[[:space:]]*syntax[[:space:]]*=' "$1/Dockerfile" || morir "Dockerfile con directiva syntax: no permitido."
+}
+
+buscar_secretos() {
+  local p="$1"
+  aviso "Buscando secretos en todo el historial"
+  docker run --rm --network none --cap-drop ALL --security-opt no-new-privileges \
+    --user "$(id -u):$(id -g)" --group-add "$(getent group oficina | cut -d: -f3)" \
+    -e GIT_CONFIG_COUNT=1 -e GIT_CONFIG_KEY_0=safe.directory -e GIT_CONFIG_VALUE_0='*' \
+    -v "$p":/repo:ro "$IMAGEN_GITLEAKS" git /repo --no-banner --redact --exit-code 1 \
+    || morir "posible secreto, o la busqueda ha fallado: revisalo antes de publicar."
+}
+
+probar() {
+  local nombre="$1" p imagen
+  p="$(ruta_proyecto "$nombre")"
+  comprobar_dockerfile "$p"
+  imagen="oficina-prueba-$nombre"
+  aviso "Tests de $nombre en Docker, sin red"
+  docker build -q --target test -t "$imagen" "$p" >/dev/null
+  docker run --rm --network none --cap-drop ALL --security-opt no-new-privileges "$imagen"
+}
+
+propietario() { gh api user --jq .login; }
+
+remoto_esperado() {
+  local url
+  url="$(git config --file "$1/.git/config" remote.origin.url 2>/dev/null || true)"
+  [ -n "$url" ] || return 0
+  case "$url" in
+    "https://github.com/$2/"*) ;;
+    *) morir "el remoto no es de tu cuenta: $url" ;;
+  esac
+}
+
+nuevo() {
+  local nombre="$1" plantilla="$2" p
+  p="$(ruta_proyecto "$nombre")"
+  [ -d "$PLANTILLAS/$plantilla" ] || morir "plantilla desconocida: $plantilla (python o web)."
+  [ ! -e "$p" ] || morir "ya existe $p."
+  # Permisos por umask y por las ACL heredadas, sin chmod, tar ni cp: el canal del panel corre con
+  # RestrictSUIDSGID, y en estas carpetas con setgid un chmod de carpeta (o el openat2 de tar) se
+  # deniega; cp, ademas, borra las ACL que dan lectura a clones y cola. Creando cada archivo con una
+  # redireccion, todo hereda lo mismo que en el resto de proyectos, aqui y en la terminal.
+  (
+    umask 0007
+    mkdir "$p"
+    cd "$PLANTILLAS/$plantilla"
+    find . -mindepth 1 -type d -print0 | while IFS= read -r -d '' d; do mkdir -p "$p/$d"; done
+    find . -type f -print0 | while IFS= read -r -d '' f; do cat < "$f" > "$p/$f"; done
+  )
+  grep -rlF __NOMBRE__ "$p" | while IFS= read -r f; do sed -i "s/__NOMBRE__/$nombre/g" "$f"; done
+  "${GIT[@]}" -C "$p" init -q
+  "${GIT[@]}" -C "$p" add -A
+  "${GIT[@]}" -C "$p" commit -q -m "Crear $nombre desde la plantilla $plantilla"
+  guardar_aprobado "$nombre" "$p"
+  aviso "Creado $p (solo en local)"
+}
+
+subir() {
+  local nombre="$1" p dueno remoto cambios
+  p="$(ruta_proyecto "$nombre")"
+  [ -d "$p" ] || morir "no existe $p."
+  revisar_repo "$p"
+  dueno="$(propietario)"
+  remoto_esperado "$p" "$dueno"
+  [ "$("${GIT[@]}" -C "$p" symbolic-ref --short HEAD)" = main ] || morir "solo se sube desde main."
+  comprobar_aprobado "$nombre" "$p"
+  [ -z "$("${GIT[@]}" -C "$p" status --porcelain --ignore-submodules=all)" ] || morir "hay cambios sin guardar en un commit."
+  probar "$nombre"
+  buscar_secretos "$p"
+
+  remoto="$(git config --file "$p/.git/config" remote.origin.url 2>/dev/null || true)"
+  echo ""
+  if [ -z "$remoto" ]; then
+    echo "Se creara el repositorio PRIVADO $dueno/$nombre. Commits a subir:"
+    "${GIT[@]}" -C "$p" --no-pager log --format='  %h %an: %s' main
+  else
+    "${GIT[@]}" -C "$p" fetch -q origin
+    if ! "${GIT[@]}" -C "$p" merge-base --is-ancestor refs/remotes/origin/main main 2>/dev/null; then
+      "${GIT[@]}" -C "$p" rev-parse -q --verify refs/remotes/origin/main >/dev/null \
+        && morir "GitHub tiene commits que aqui no estan; no se fuerza la subida."
+    fi
+    cambios="$("${GIT[@]}" -C "$p" rev-list --count refs/remotes/origin/main..main 2>/dev/null || echo todos)"
+    [ "$cambios" != 0 ] || { echo "No hay nada nuevo que subir."; return 0; }
+    echo "Destino: $remoto. Commits a subir:"
+    "${GIT[@]}" -C "$p" --no-pager log --format='  %h %an: %s' refs/remotes/origin/main..main
+    "${GIT[@]}" -C "$p" --no-pager diff --stat refs/remotes/origin/main..main
+    if [ -n "$("${GIT[@]}" -C "$p" diff --name-only refs/remotes/origin/main..main -- .github)" ]; then
+      echo ""
+      echo "ATENCION: cambian archivos de .github. Se ejecutaran en GitHub; revisalos antes de aprobar."
+    fi
+  fi
+  confirmar "subir $nombre"
+
+  if [ -z "$remoto" ]; then
+    gh repo create "$dueno/$nombre" --private --disable-wiki >/dev/null
+    "${GIT[@]}" -C "$p" remote add origin "https://github.com/$dueno/$nombre.git"
+  fi
+  "${GIT[@]}" -C "$p" push -u origin refs/heads/main:refs/heads/main
+  registrar "subir $dueno/$nombre $("${GIT[@]}" -C "$p" rev-parse --short main)"
+  aviso "Subido. Para ver los tests: gh run list -R $dueno/$nombre"
+}
+
+pages() {
+  local nombre="$1" p dueno visibilidad url
+  p="$(ruta_proyecto "$nombre")"
+  [ -f "$p/.github/workflows/publicar-pages.yml" ] || morir "$nombre no tiene el flujo de GitHub Pages."
+  revisar_repo "$p"
+  dueno="$(propietario)"
+  remoto_esperado "$p" "$dueno"
+  comprobar_aprobado "$nombre" "$p"
+  [ -n "$(git config --file "$p/.git/config" remote.origin.url || true)" ] || morir "primero usa: oficina-entrega subir $nombre"
+  "${GIT[@]}" -C "$p" fetch -q origin
+  [ "$("${GIT[@]}" -C "$p" rev-parse main)" = "$("${GIT[@]}" -C "$p" rev-parse refs/remotes/origin/main)" ] \
+    || morir "main no coincide con GitHub; primero usa: oficina-entrega subir $nombre"
+  buscar_secretos "$p"
+
+  visibilidad="$(gh repo view "$dueno/$nombre" --json visibility --jq .visibility)"
+  if [ "$visibilidad" != PUBLIC ]; then
+    echo ""
+    echo "Con GitHub Free, Pages exige un repositorio publico."
+    echo "TODO $dueno/$nombre y su historial quedaran visibles para cualquiera."
+    confirmar "hacer publico $nombre"
+    gh repo edit "$dueno/$nombre" --visibility public --accept-visibility-change-consequences
+    registrar "hacer-publico $dueno/$nombre"
+  fi
+
+  echo ""
+  echo "Se publicara la carpeta public/ de $dueno/$nombre en GitHub Pages."
+  confirmar "publicar pages $nombre"
+  gh api -X POST "repos/$dueno/$nombre/pages" -f build_type=workflow >/dev/null 2>&1 \
+    || gh api -X PUT "repos/$dueno/$nombre/pages" -f build_type=workflow >/dev/null
+  gh workflow run publicar-pages.yml -R "$dueno/$nombre" --ref main
+  registrar "pages $dueno/$nombre $("${GIT[@]}" -C "$p" rev-parse --short main)"
+  url="$(gh api "repos/$dueno/$nombre/pages" --jq .html_url)"
+  aviso "Publicacion lanzada: $url"
+  aviso "Para ver cuando termina: gh run list -R $dueno/$nombre --workflow publicar-pages.yml"
+}
+
+imagen_vercel() {
+  docker image inspect "$IMAGEN_VERCEL" >/dev/null 2>&1 && return 0
+  aviso "Preparando la herramienta de Vercel $VERSION_VERCEL"
+  docker build -q -t "$IMAGEN_VERCEL" --build-arg VERSION="$VERSION_VERCEL" /opt/oficina/fase-3/vercel >/dev/null
+}
+
+docker_vercel() {
+  install -d -m 0700 "$SESION_VERCEL"
+  local tty=(-i)
+  [ -t 0 ] && tty=(-it)
+  docker run --rm "${tty[@]}" --cap-drop ALL --security-opt no-new-privileges \
+    --user "$(id -u):$(id -g)" --group-add "$(getent group oficina | cut -d: -f3)" \
+    -e HOME=/sesion -v "$SESION_VERCEL":/sesion "$@"
+}
+
+vercel_login() {
+  imagen_vercel
+  docker_vercel "$IMAGEN_VERCEL" login
+}
+
+vercel() {
+  local nombre="$1" p dueno
+  p="$(ruta_proyecto "$nombre")"
+  [ -f "$p/vercel.json" ] || morir "$nombre no tiene vercel.json."
+  revisar_repo "$p"
+  dueno="$(propietario)"
+  remoto_esperado "$p" "$dueno"
+  [ "$("${GIT[@]}" -C "$p" symbolic-ref --short HEAD)" = main ] || morir "solo se publica desde main."
+  comprobar_aprobado "$nombre" "$p"
+  [ -z "$("${GIT[@]}" -C "$p" status --porcelain --ignore-submodules=all)" ] || morir "hay cambios sin guardar en un commit."
+  probar "$nombre"
+  buscar_secretos "$p"
+  imagen_vercel
+  echo ""
+  echo "Se publicara $nombre en PRODUCCION en Vercel."
+  confirmar "publicar vercel $nombre"
+  # Se ejecuta fuera del proyecto para no leer un .npmrc o similar escrito por agente.
+  docker_vercel -v "$p":/trabajo -w /tmp "$IMAGEN_VERCEL" deploy /trabajo --prod
+  registrar "vercel $nombre $("${GIT[@]}" -C "$p" rev-parse --short main)"
+}
+
+adoptar() {
+  local nombre="$1" p
+  p="$(ruta_proyecto "$nombre")"
+  [ -d "$p" ] || morir "no existe $p."
+  revisar_repo "$p"
+  echo "Ultimos commits de main en $nombre:"
+  "${GIT[@]}" -C "$p" --no-pager log -n 10 --format='  %h %an: %s' main
+  echo ""
+  echo "Comprueba que los reconoces: pasaran a ser el main aprobado."
+  confirmar "adoptar $nombre"
+  guardar_aprobado "$nombre" "$p"
+  registrar "adoptar $nombre $("${GIT[@]}" -C "$p" rev-parse --short main)"
+  aviso "main de $nombre aprobado."
+}
+
+revisar() {
+  local nombre="$1" p
+  p="$(ruta_proyecto "$nombre")"
+  [ -d "$p" ] || morir "no existe $p."
+  revisar_repo "$p"
+  comprobar_aprobado "$nombre" "$p"
+}
+
+aprobar() {
+  # revisado: commit exacto que aprobaste en el panel. Sin el, se pide la frase en la terminal.
+  # esperado: commit que QA aprobo. Con el o sin el, en la terminal se sigue pidiendo la frase.
+  local nombre="$1" rama="$2" revisado="${3:-}" esperado="${4:-}" p sha anterior
+  p="$(ruta_proyecto "$nombre")"
+  [ -d "$p" ] || morir "no existe $p."
+  [[ "$rama" =~ ^agente/[A-Za-z0-9._-]+$ ]] || morir "solo se aprueban ramas agente/..."
+  revisar_repo "$p"
+  comprobar_aprobado "$nombre" "$p"
+  [ "$("${GIT[@]}" -C "$p" symbolic-ref --short HEAD)" = main ] || morir "el proyecto no esta en main."
+  [ -z "$("${GIT[@]}" -C "$p" status --porcelain --ignore-submodules=all)" ] || morir "hay cambios sin guardar en un commit."
+  sha="$("${GIT[@]}" -C "$p" rev-parse "refs/heads/$rama^{commit}")" || morir "no existe la rama $rama."
+  [ -z "$esperado" ] || [ "$sha" = "$esperado" ] || morir "la rama ya no es el commit que aprobo QA: no se ha hecho nada."
+  # A partir de aqui se usa este commit exacto, aunque la rama cambiase despues.
+  anterior="$("${GIT[@]}" -C "$p" rev-parse main)"
+  "${GIT[@]}" -C "$p" --no-pager log --format='  %h %an: %s' "$anterior..$sha"
+  "${GIT[@]}" -C "$p" --no-pager diff --stat "$anterior...$sha"
+  if [ -n "$("${GIT[@]}" -C "$p" diff --name-only "$anterior...$sha" -- .github Dockerfile compose.yaml requirements.txt package.json package-lock.json)" ]; then
+    echo ""
+    echo "ATENCION: cambian dependencias, Docker o flujos de GitHub. Revisalos con el diff."
+  fi
+  echo ""
+  echo "Para ver el diff completo: git -C $p --no-pager diff --no-ext-diff --no-textconv $anterior...$sha"
+  if [ -n "$revisado" ]; then
+    [ "$sha" = "$revisado" ] || morir "la rama ha cambiado desde que la revisaste: no se ha hecho nada."
+  else
+    confirmar "aprobar $nombre $rama"
+  fi
+
+  if ! "${GIT[@]}" -C "$p" merge -q --no-ff --no-edit --no-verify -m "Aprobar $rama" "$sha"; then
+    "${GIT[@]}" -C "$p" merge --abort 2>/dev/null || true
+    morir "conflicto al combinar: main no ha cambiado."
+  fi
+  "${GIT[@]}" -C "$p" merge-base --is-ancestor "$sha" main || morir "el merge no ha llegado a main."
+  if ! probar "$nombre" || ! buscar_secretos "$p"; then
+    "${GIT[@]}" -C "$p" reset -q --hard "$anterior"
+    morir "el resultado no ha pasado las comprobaciones: main no ha cambiado."
+  fi
+  guardar_aprobado "$nombre" "$p"
+  registrar "aprobar $nombre $rama $(printf '%.7s' "$sha")"
+  aviso "Merge hecho en local. Para subirlo: oficina-entrega subir $nombre"
+}
+
+comprobar_usuario
+orden="${1:-}"
+case "$orden" in
+  nuevo)        [ "$#" -eq 3 ] || morir "uso: oficina-entrega nuevo <proyecto> <python|web>"; nuevo "$2" "$3" ;;
+  probar)       [ "$#" -eq 2 ] || morir "uso: oficina-entrega probar <proyecto>"; probar "$2" ;;
+  subir)        [ "$#" -eq 2 ] || morir "uso: oficina-entrega subir <proyecto>"; subir "$2" ;;
+  pages)        [ "$#" -eq 2 ] || morir "uso: oficina-entrega pages <proyecto>"; pages "$2" ;;
+  vercel)       [ "$#" -eq 2 ] || morir "uso: oficina-entrega vercel <proyecto>"; vercel "$2" ;;
+  vercel-login) vercel_login ;;
+  aprobar)
+    [ "$#" -eq 3 ] || [ "$#" -eq 4 ] || morir "uso: oficina-entrega aprobar <proyecto> <rama> [commit de QA]"
+    [ "$#" -eq 3 ] || [[ "$4" =~ ^[0-9a-f]{40}$ ]] || morir "commit no valido."
+    aprobar "$2" "$3" "" "${4:-}" ;;
+  adoptar)      [ "$#" -eq 2 ] || morir "uso: oficina-entrega adoptar <proyecto>"; adoptar "$2" ;;
+  revisar)      [ "$#" -eq 2 ] || morir "uso: oficina-entrega revisar <proyecto>"; revisar "$2" ;;
+  aprobar-panel)
+    # Solo la llama el canal del panel, que ya ha comprobado la frase escrita y el commit.
+    [ "$#" -eq 4 ] || morir "uso: oficina-entrega aprobar-panel <proyecto> <rama> <commit>"
+    [[ "$4" =~ ^[0-9a-f]{40}$ ]] || morir "commit no valido."
+    aprobar "$2" "$3" "$4" ;;
+  *)            sed -n '2,10p' "$0" | sed 's/^# //' >&2; exit 2 ;;
+esac

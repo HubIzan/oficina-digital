@@ -1,0 +1,28 @@
+#!/usr/bin/env python3
+"""Pide los tests de un proyecto en Docker: oficina-probar <proyecto> [commit]
+
+Sin commit prueba la carpeta de trabajo, con los cambios sin guardar. Con commit, ese commit exacto.
+"""
+import socket
+import sys
+
+if len(sys.argv) not in (2, 3):
+    sys.exit("Uso: oficina-probar <proyecto> [commit]")
+
+s = socket.socket(socket.AF_UNIX)
+s.settimeout(1900)
+s.connect("/run/oficina-pruebas.sock")
+s.sendall(" ".join(sys.argv[1:]).encode() + b"\n")
+datos = b""
+while True:
+    b = s.recv(65536)
+    if not b:
+        break
+    datos += b
+texto = datos.decode(errors="replace")
+cuerpo, _, final = texto.rpartition("__CODIGO__ ")
+sys.stdout.write(cuerpo)
+try:
+    sys.exit(int(final.strip()))
+except ValueError:
+    sys.exit(1)

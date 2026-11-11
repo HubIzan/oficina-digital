@@ -1,0 +1,58 @@
+---
+// Plantilla comun: SEO, Open Graph, accesibilidad y enlaces legales en todas las paginas.
+import sitio from "../../sitio.config.json";
+
+interface Props {
+  titulo: string;
+  descripcion: string;
+  indexar?: boolean;
+  datos?: Record<string, unknown>;
+}
+const { titulo, descripcion, indexar = true, datos } = Astro.props;
+const canonica = new URL(Astro.url.pathname, Astro.site).href;
+const secciones = [
+  { href: "/", texto: "Inicio" },
+  // Añade aqui las paginas de la web, en el mismo orden que el menu.
+];
+---
+<!doctype html>
+<html lang={sitio.idioma}>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{titulo}</title>
+    <meta name="description" content={descripcion} />
+    <link rel="canonical" href={canonica} />
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content={titulo} />
+    <meta property="og:description" content={descripcion} />
+    <meta property="og:url" content={canonica} />
+    <meta property="og:locale" content="es_ES" />
+    {!indexar && <meta name="robots" content="noindex" />}
+    <meta name="theme-color" content="#1f2a44" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="sitemap" href="/sitemap-index.xml" />
+    <link rel="stylesheet" href="/estilos.css" />
+    {datos && <script type="application/ld+json" set:html={JSON.stringify(datos)} />}
+  </head>
+  <body>
+    <a class="saltar" href="#contenido">Saltar al contenido</a>
+    <header class="cabecera">
+      <a class="marca" href="/">{sitio.nombre}</a>
+      <nav aria-label="Principal">
+        <ul>{secciones.map((s) => <li><a href={s.href}>{s.texto}</a></li>)}</ul>
+      </nav>
+    </header>
+    <main id="contenido"><slot /></main>
+    <footer class="pie">
+      <p>© {sitio.titular.nombre}</p>
+      <nav aria-label="Legal">
+        <ul>
+          <li><a href="/aviso-legal/">Aviso legal</a></li>
+          <li><a href="/privacidad/">Privacidad</a></li>
+          <li><a href="/cookies/">Cookies</a></li>
+        </ul>
+      </nav>
+    </footer>
+  </body>
+</html>

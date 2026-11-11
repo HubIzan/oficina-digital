@@ -1,0 +1,869 @@
+#!/usr/bin/env python3
+"""Vigilante de correo de la Oficina: ordena el Gmail con reglas fijas y, para lo demas, con Haiku.
+
+Corre como el usuario `correo`, el unico que puede leer el permiso de Google. Solo conoce estas
+llamadas de la API de Gmail: perfil, historial, buscar y leer cabeceras de mensajes, etiquetas y
+cambiar etiquetas de un mensaje (o de un hilo, solo para deshacer acciones antiguas). No hay codigo
+para borrar, enviar, responder ni descargar nada.
+
+Ordenes (todas con sudo):
+  oficina-correo ciclo                  una pasada (la lanza el temporizador cada 5 minutos)
+  oficina-correo estado                 que ha hecho y si puede usar la IA
+  oficina-correo pausar | reanudar      parar o seguir (reanudar tambien quita la marca de pago por uso)
+  oficina-correo conectar <cliente.json> autorizar la cuenta de Google
+  oficina-correo reglas                 aplicar las reglas de la boveda (ensena los cambios y pide confirmacion)
+  oficina-correo deshacer <AAAA-MM-DD>  devolver a la bandeja lo archivado desde ese dia
+"""
+import base64
+import datetime
+import difflib
+import email.utils
+import fcntl
+import hashlib
+import http.server
+import json
+import os
+import re
+import secrets
+import socket
+import stat
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+from pathlib import Path
+
+ES_ROOT = os.geteuid() == 0
+
+
+def ajuste(nombre, defecto):
+    """Las variables OFICINA_* son para las pruebas. Como root no valen: podrian desviar el permiso a otro sitio."""
+    return defecto if ES_ROOT else os.environ.get(nombre, defecto)
+
+
+DATOS = Path(ajuste("OFICINA_CORREO_DATOS", "/var/lib/oficina/correo"))
+REGLAS = Path(ajuste("OFICINA_CORREO_REGLAS", "/etc/oficina/correo-reglas.md"))
+BOVEDA = Path(ajuste("OFICINA_CORREO_BOVEDA", "/srv/oficina/boveda"))
+REGLAS_EN_BOVEDA = ("Conocimiento", "Correo - reglas.md")
+PAUSA_COLA = Path(ajuste("OFICINA_PAUSA_COLA", "/var/lib/oficina/control/pausa"))
+API = ajuste("OFICINA_GMAIL_API", "https://gmail.googleapis.com/gmail/v1/users/me")
+TOKEN_URL = ajuste("OFICINA_GOOGLE_TOKEN", "https://oauth2.googleapis.com/token")
+AUTORIZAR_URL = "https://accounts.google.com/o/oauth2/v2/auth"
+SOCKET_IA = ajuste("OFICINA_CLASIFICAR_SOCK", "/run/oficina-clasificar.sock")
+USUARIO = "correo"
+ALCANCE = "https://www.googleapis.com/auth/gmail.modify"
+ENTORNO_LIMPIO = ["env", "-i", "PATH=/usr/bin:/bin", "LANG=C.UTF-8"]
+
+CLIENTE = DATOS / "cliente.json"
+TOKEN = DATOS / "token.json"
+ESTADO = DATOS / "estado.json"
+AVISOS = DATOS / "avisos.json"  # Lo unico que lee el panel.
+REGISTRO = DATOS / "registro.log"
+PAUSA = DATOS / "pausa"
+CERROJO = DATOS / ".cerrojo"
+
+CLASES = ("prioritario", "publicidad", "aviso", "revisar")
+ETIQUETAS = {"prioritario": "Prioritario", "publicidad": "Publicidad", "aviso": "Avisos pasados", "revisar": "Revisar"}
+# Orden de las secciones del archivo de reglas; si un correo encaja en varias, gana la primera.
+SECCIONES = {"prioritario": "prioritario", "revisar": "revisar", "avisos pasados": "aviso", "publicidad": "publicidad"}
+CATEGORIAS = {"promociones": "CATEGORY_PROMOTIONS", "social": "CATEGORY_SOCIAL", "notificaciones": "CATEGORY_UPDATES", "foros": "CATEGORY_FORUMS"}
+CABECERAS = ["From", "Subject", "Authentication-Results", "List-Unsubscribe", "List-Id", "Precedence", "Auto-Submitted"]
+DIAS_AVISO = 2
+MAX_POR_CICLO = 200
+MAX_PENDIENTES = 300
+MAX_PAGINAS = 10
+POR_LLAMADA_IA = 10
+MAX_LLAMADAS_IA_DIA = 60
+MAX_INTENTOS_IA = 3
+# Por debajo de los limites de la cola (90 % y 70 %): el correo cede la cuota a los proyectos.
+LIMITES_IA = {"five_hour": 0.75, "seven_day": 0.60}
+MAX_AVISOS = 20
+VIDA_AVISO_S = 48 * 3600
+MAX_REGLAS = 64 * 1024
+TIEMPO_RED_S = 30
+TIEMPO_IA_S = 200
+ID_RE = re.compile(r"^[0-9a-f]{6,24}\Z")
+HISTORIA_RE = re.compile(r"^[0-9]{1,20}\Z")
+ETIQUETA_RE = re.compile(r"^[A-Za-z0-9_]{1,64}\Z")
+FECHA_RE = re.compile(r"^\d{4}-\d{2}-\d{2}\Z")
+# Controles, borrado y caracteres invisibles o de direccion de texto (escritos como escapes, no a la vista).
+CONTROL_RE = re.compile(r"[\x00-\x1f\x7f-\x9f\u200b-\u200f\u2028-\u202e\u2060-\u2069\ufeff]")
+DOMINIO_RE = re.compile(r"^[a-z0-9.-]+\.[a-z]{2,24}\Z")
+
+
+# ----------------------------------------------------------------- utilidades
+
+def ahora_iso():
+    return datetime.datetime.now().astimezone().isoformat(timespec="seconds")
+
+
+def limpio(texto, maximo):
+    """Una linea, sin caracteres de control ni de direccion de texto, y corta."""
+    if not isinstance(texto, str):
+        return ""
+    t = CONTROL_RE.sub(" ", texto)
+    t = " ".join(t.split())
+    return t[:maximo]
+
+
+def escribir_json(ruta, datos, modo=0o600):
+    """Temporal exclusivo y con nombre al azar: nadie puede dejar preparado un enlace en su sitio."""
+    fd, tmp = tempfile.mkstemp(prefix=f".{ruta.name}.", dir=ruta.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            os.fchmod(f.fileno(), modo)
+            json.dump(datos, f, ensure_ascii=False, indent=1)
+            f.write("\n")
+        os.replace(tmp, ruta)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
+
+
+def leer_json(ruta, defecto):
+    try:
+        fd = os.open(ruta, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        with os.fdopen(fd, "rb") as f:
+            if not stat.S_ISREG(os.fstat(f.fileno()).st_mode):
+                return defecto
+            d = json.loads(f.read(1024 * 1024))
+    except (OSError, ValueError):
+        return defecto
+    return d if isinstance(d, type(defecto)) else defecto
+
+
+def anotar(ident, accion, clase, origen, tipo="m"):
+    """tipo «m»: un mensaje. Las lineas antiguas, sin tipo, son de un hilo entero."""
+    linea = f"{ahora_iso()}\t{ident}\t{accion}\t{clase}\t{origen}\t{tipo}\n"
+    fd = os.open(REGISTRO, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, "a", encoding="utf-8") as f:
+        f.write(linea)
+
+
+def numero(v, minimo, maximo):
+    return v if isinstance(v, (int, float)) and not isinstance(v, bool) and minimo <= v <= maximo else None
+
+
+SIN_CONECTAR = -1  # No es un fallo: todavia no has autorizado la cuenta.
+
+
+class ErrorGmail(Exception):
+    def __init__(self, codigo, mensaje):
+        super().__init__(mensaje)
+        self.codigo = codigo
+
+
+class SinRedireccion(urllib.request.HTTPRedirectHandler):
+    """Una redireccion reenviaria el permiso a otra direccion: se trata como error."""
+
+    def redirect_request(self, *_):
+        return None
+
+
+ABRIR = urllib.request.build_opener(SinRedireccion).open
+
+
+# ----------------------------------------------------------------- Google
+
+def pedir_token(campos):
+    cuerpo = urllib.parse.urlencode(campos).encode()
+    pet = urllib.request.Request(TOKEN_URL, data=cuerpo, headers={"Content-Type": "application/x-www-form-urlencoded"})
+    try:
+        with ABRIR(pet, timeout=TIEMPO_RED_S) as r:
+            return json.loads(r.read(64 * 1024))
+    except urllib.error.HTTPError as e:
+        raise ErrorGmail(e.code, f"Google no da acceso ({e.code}): vuelve a ejecutar «sudo oficina-correo conectar»") from None
+    except (urllib.error.URLError, OSError, ValueError) as e:
+        raise ErrorGmail(0, f"sin conexión con Google ({type(e).__name__})") from None
+
+
+def acceso():
+    cliente = leer_json(CLIENTE, {})
+    token = leer_json(TOKEN, {})
+    if not cliente.get("client_id") or not token.get("refresh_token"):
+        raise ErrorGmail(SIN_CONECTAR, "Falta conectar la cuenta: «sudo oficina-correo conectar <cliente.json>»")
+    r = pedir_token({"client_id": cliente["client_id"], "client_secret": cliente.get("client_secret", ""),
+                     "refresh_token": token["refresh_token"], "grant_type": "refresh_token"})
+    if not isinstance(r.get("access_token"), str):
+        raise ErrorGmail(0, "Google no ha devuelto acceso")
+    return r["access_token"]
+
+
+class Gmail:
+    """Las unicas llamadas que existen. Cualquier otra ruta da error antes de salir a la red."""
+
+    PERMITIDAS = {
+        ("GET", "profile"), ("GET", "history"), ("GET", "messages"), ("GET", "messages/*"), ("GET", "labels"),
+        ("POST", "labels"), ("POST", "messages/*/modify"), ("POST", "threads/*/modify"),
+    }
+
+    def __init__(self, token):
+        self.token = token
+        self.llamadas = []
+
+    @staticmethod
+    def forma(ruta):
+        partes = ruta.split("/")
+        if len(partes) >= 2:
+            partes[1] = "*"
+        return "/".join(partes)
+
+    def llamar(self, metodo, ruta, consulta=None, cuerpo=None):
+        if (metodo, self.forma(ruta)) not in self.PERMITIDAS:
+            raise ErrorGmail(0, f"llamada no permitida: {metodo} {ruta}")
+        url = f"{API}/{ruta}"
+        if consulta:
+            url += "?" + urllib.parse.urlencode(consulta, doseq=True)
+        datos = json.dumps(cuerpo).encode() if cuerpo is not None else None
+        pet = urllib.request.Request(url, data=datos, method=metodo, headers={"Authorization": f"Bearer {self.token}", "Content-Type": "application/json"})
+        self.llamadas.append((metodo, ruta))
+        try:
+            with ABRIR(pet, timeout=TIEMPO_RED_S) as r:
+                crudo = r.read(2 * 1024 * 1024)
+        except urllib.error.HTTPError as e:
+            raise ErrorGmail(e.code, f"Gmail respondió {e.code} en {ruta.split('/')[0]}") from None
+        except (urllib.error.URLError, OSError) as e:
+            raise ErrorGmail(0, f"sin conexión con Gmail ({type(e).__name__})") from None
+        try:
+            d = json.loads(crudo) if crudo else {}
+        except ValueError:
+            raise ErrorGmail(0, "respuesta de Gmail ilegible") from None
+        return d if isinstance(d, dict) else {}
+
+    def perfil(self):
+        return self.llamar("GET", "profile")
+
+    def historial(self, desde):
+        ids, ultimo, pagina = [], desde, None
+        for _ in range(MAX_PAGINAS):
+            consulta = {"startHistoryId": desde, "historyTypes": "messageAdded", "labelId": "INBOX", "maxResults": 500}
+            if pagina:
+                consulta["pageToken"] = pagina
+            d = self.llamar("GET", "history", consulta)
+            for h in d.get("history") or []:
+                for m in (h.get("messagesAdded") or []) if isinstance(h, dict) else []:
+                    mid = (m.get("message") or {}).get("id") if isinstance(m, dict) else None
+                    if isinstance(mid, str) and ID_RE.match(mid) and mid not in ids:
+                        ids.append(mid)
+            if isinstance(d.get("historyId"), str) and HISTORIA_RE.match(d["historyId"]):
+                ultimo = d["historyId"]
+            pagina = d.get("nextPageToken")
+            if not isinstance(pagina, str) or not pagina:
+                break
+        return ids, ultimo
+
+    def mensaje(self, mid):
+        return self.llamar("GET", f"messages/{mid}", {"format": "metadata", "metadataHeaders": CABECERAS})
+
+    def buscar(self, q, maximo=100):
+        d = self.llamar("GET", "messages", {"q": q, "maxResults": maximo})
+        return [m["id"] for m in d.get("messages") or [] if isinstance(m, dict) and isinstance(m.get("id"), str) and ID_RE.match(m["id"])]
+
+    def etiquetas(self):
+        return self.llamar("GET", "labels").get("labels") or []
+
+    def crear_etiqueta(self, nombre):
+        return self.llamar("POST", "labels", cuerpo={"name": nombre, "labelListVisibility": "labelShow", "messageListVisibility": "show"})
+
+    @staticmethod
+    def _comprobar(ident, poner, quitar):
+        if not ID_RE.match(ident):
+            raise ErrorGmail(0, "identificador no válido")
+        for e in (*poner, *quitar):
+            if not ETIQUETA_RE.match(e):
+                raise ErrorGmail(0, "etiqueta no válida")
+        # Nunca TRASH ni SPAM, aunque alguien lo cuele en una regla.
+        if {"TRASH", "SPAM"} & set(poner):
+            raise ErrorGmail(0, "papelera y spam no se usan")
+
+    def cambiar_mensaje(self, mid, poner=(), quitar=()):
+        """Solo el mensaje clasificado: los demas de la conversacion no se tocan."""
+        self._comprobar(mid, poner, quitar)
+        self.llamar("POST", f"messages/{mid}/modify", cuerpo={"addLabelIds": list(poner), "removeLabelIds": list(quitar)})
+
+    def cambiar_hilo(self, hilo, poner=(), quitar=()):
+        """Solo para deshacer lo que se archivo por hilos antes del 2026-11-11."""
+        self._comprobar(hilo, poner, quitar)
+        self.llamar("POST", f"threads/{hilo}/modify", cuerpo={"addLabelIds": list(poner), "removeLabelIds": list(quitar)})
+
+
+# ----------------------------------------------------------------- reglas
+
+def leer_reglas(texto):
+    """Secciones «## Prioritario|Revisar|Avisos pasados|Publicidad» con lineas «- patron»."""
+    reglas = {c: [] for c in CLASES}
+    actual = None
+    for linea in texto.splitlines():
+        l = linea.strip()
+        if l.startswith("## "):
+            actual = SECCIONES.get(l[3:].strip().lower())
+            continue
+        if actual is None or not l.startswith("- "):
+            continue
+        p = l[2:].split("#", 1)[0].strip()
+        if not p:
+            continue
+        if p.lower().startswith("asunto:"):
+            valor = p[7:].strip().lower()
+            if len(valor) >= 3:
+                reglas[actual].append(("asunto", valor[:120]))
+        elif p.lower().startswith("categoria:"):
+            cat = CATEGORIAS.get(p[10:].strip().lower())
+            if cat:
+                reglas[actual].append(("categoria", cat))
+        elif re.fullmatch(r"@[a-z0-9.-]+\.[a-z]{2,24}", p.lower()):
+            reglas[actual].append(("dominio", p.lower()[1:]))
+        elif re.fullmatch(r"[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,24}", p.lower()):
+            reglas[actual].append(("direccion", p.lower()))
+    return reglas
+
+
+def lineas_raras(texto):
+    """Numeros de linea con caracteres de control o invisibles: podrian esconder algo en la pantalla."""
+    return [n for n, l in enumerate(texto.splitlines(), 1) if CONTROL_RE.search(l)]
+
+
+def leer_boveda(raiz=None, partes=REGLAS_EN_BOVEDA):
+    """Lee el archivo de reglas de la boveda sin seguir enlaces en ningun tramo: los agentes escriben ahi."""
+    raiz = raiz or BOVEDA
+    fd = os.open(raiz, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    try:
+        for parte in partes[:-1]:
+            nuevo = os.open(parte, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=fd)
+            os.close(fd)
+            fd = nuevo
+        hoja = os.open(partes[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC, dir_fd=fd)
+    finally:
+        os.close(fd)
+    with os.fdopen(hoja, "rb") as f:
+        st = os.fstat(f.fileno())
+        if not stat.S_ISREG(st.st_mode) or st.st_nlink != 1:
+            raise OSError("no es un archivo normal")
+        crudo = f.read(MAX_REGLAS + 1)
+    if len(crudo) > MAX_REGLAS:
+        raise OSError("demasiado grande")
+    return crudo.decode("utf-8")
+
+
+# ----------------------------------------------------------------- remitente
+
+def remitente(cabecera):
+    """(direccion, nombre) con el analizador de correo: un «<otra@direccion>» en el nombre no cuenta."""
+    pares = email.utils.getaddresses([cabecera or ""])
+    pares = [(n, d) for n, d in pares if d]
+    if len(pares) != 1:
+        return "", limpio(cabecera, 60)
+    nombre, direccion = pares[0]
+    direccion = direccion.strip().lower()
+    if direccion.count("@") != 1 or not DOMINIO_RE.match(direccion.rsplit("@", 1)[1]):
+        return "", limpio(nombre or cabecera, 60)
+    return direccion, limpio(nombre or direccion, 60)
+
+
+def alineado(a, b):
+    return bool(a) and bool(b) and (a == b or a.endswith("." + b) or b.endswith("." + a))
+
+
+def autenticado(correo):
+    """¿Confirma Gmail que el correo viene del dominio del remitente? Solo vale su propia cabecera, la primera."""
+    ar = (correo.get("autenticacion") or "").lower()
+    dominio = correo["direccion"].rsplit("@", 1)[-1] if correo["direccion"] else ""
+    if not dominio or not ar.startswith("mx.google.com;"):
+        return False
+    for patron in (r"\bdmarc=pass\b[^;]*?\bheader\.from=([a-z0-9.-]+)",
+                   r"\bdkim=pass\b[^;]*?\bheader\.[id]=@?([a-z0-9.-]+)",
+                   r"\bspf=pass\b[^;]*?\bsmtp\.mailfrom=(?:[^@\s;]*@)?([a-z0-9.-]+)"):
+        if any(alineado(d, dominio) for d in re.findall(patron, ar)):
+            return True
+    return False
+
+
+def masivo(correo):
+    """Cabeceras de envio masivo o automatico: un correo personal no las lleva, y nadie puede ponerselas al de otro."""
+    c = correo.get("cabeceras") or {}
+    if c.get("list-unsubscribe") or c.get("list-id"):
+        return True
+    if c.get("precedence", "").strip().lower() in ("bulk", "list", "junk"):
+        return True
+    auto = c.get("auto-submitted", "").strip().lower()
+    return bool(auto) and auto != "no"
+
+
+def decidir(clase, origen, correo):
+    """Lo que puede hacer cada origen. Las reglas mandan; la IA nunca archiva un correo personal."""
+    if clase == "prioritario" and not autenticado(correo):
+        return "revisar", f"{origen}-sin-firma"
+    if origen == "ia" and clase in ("publicidad", "aviso") and not masivo(correo):
+        return "revisar", "ia-no-masivo"
+    return clase, origen
+
+
+def segun_reglas(reglas, correo):
+    direccion = correo["direccion"]
+    dominio = direccion.rsplit("@", 1)[-1] if direccion else ""
+    asunto = correo["asunto"].lower()
+    for clase in ("prioritario", "revisar", "aviso", "publicidad"):
+        for tipo, valor in reglas.get(clase, []):
+            if ((tipo == "direccion" and direccion == valor)
+                    or (tipo == "dominio" and (dominio == valor or dominio.endswith("." + valor)))
+                    or (tipo == "asunto" and valor in asunto)
+                    or (tipo == "categoria" and valor in correo["etiquetas"])):
+                return clase
+    return None
+
+
+# ----------------------------------------------------------------- IA
+
+def ia_disponible(estado):
+    ia = estado.setdefault("ia", {})
+    hoy = datetime.date.today().isoformat()
+    if ia.get("dia") != hoy:
+        ia["dia"], ia["llamadas"] = hoy, 0
+    if ia.get("pago"):
+        return False, "pago por uso detectado"
+    if PAUSA_COLA.exists():
+        return False, "Oficina en pausa"
+    if ia.get("llamadas", 0) >= MAX_LLAMADAS_IA_DIA:
+        return False, "límite diario de la IA"
+    for nombre, limite in LIMITES_IA.items():
+        v = (ia.get("cuota") or {}).get(nombre) or {}
+        uso, renueva = numero(v.get("uso"), 0, 1.5), numero(v.get("renueva"), 1e9, 1e11)
+        if uso is not None and uso >= limite and renueva is not None and renueva > time.time():
+            return False, f"cuota {nombre} alta"
+    return True, None
+
+
+def preguntar_ia(estado, lote):
+    """Manda hasta 10 correos al clasificador. Devuelve {n: clase}, o None con el motivo en estado."""
+    peticion = {"correos": [{"n": i, "de": c["de_texto"], "asunto": c["asunto"], "texto": c["extracto"]} for i, c in enumerate(lote, 1)]}
+    ia = estado["ia"]
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+            s.settimeout(TIEMPO_IA_S)
+            s.connect(SOCKET_IA)
+            ia["llamadas"] = ia.get("llamadas", 0) + 1  # Solo cuenta si de verdad llega al clasificador.
+            s.sendall(json.dumps(peticion, ensure_ascii=False).encode() + b"\n")
+            s.shutdown(socket.SHUT_WR)
+            crudo = b""
+            while len(crudo) < 64 * 1024:
+                trozo = s.recv(8192)
+                if not trozo:
+                    break
+                crudo += trozo
+        r = json.loads(crudo or b"{}")
+    except OSError:
+        ia["error"] = "el clasificador no responde"
+        return None
+    except ValueError:
+        r = {"error": "respuesta ilegible"}
+    if not isinstance(r, dict):
+        r = {"error": "respuesta ilegible"}
+    if r.get("pago") is True:
+        ia["pago"] = True
+    cuota = r.get("cuota")
+    if isinstance(cuota, dict):
+        ia["cuota"] = {k: {"uso": numero(v.get("uso"), 0, 1.5), "renueva": numero(v.get("renueva"), 1e9, 1e11)}
+                       for k, v in cuota.items() if k in LIMITES_IA and isinstance(v, dict)}
+    if r.get("error"):
+        ia["error"] = limpio(str(r["error"]), 120)
+        ia["fallo_respuesta"] = True
+        return None
+    ia.pop("error", None)
+    ia.pop("fallo_respuesta", None)
+    clases = r.get("clases") if isinstance(r.get("clases"), dict) else {}
+    return {i: (clases.get(str(i)) if clases.get(str(i)) in CLASES else "revisar") for i in range(1, len(lote) + 1)}
+
+
+# ----------------------------------------------------------------- ciclo
+
+def asegurar_etiquetas(g):
+    ids = {}
+    existentes = {e.get("name"): e.get("id") for e in g.etiquetas() if isinstance(e, dict)}
+    for clase, nombre in ETIQUETAS.items():
+        lid = existentes.get(nombre) or g.crear_etiqueta(nombre).get("id")
+        if not isinstance(lid, str) or not ETIQUETA_RE.match(lid):
+            raise ErrorGmail(0, f"no se puede usar la etiqueta {nombre}")
+        ids[clase] = lid
+    return ids
+
+
+def leer_correo(g, mid, etiquetas):
+    m = g.mensaje(mid)
+    hilo = m.get("threadId")
+    etiq = [e for e in (m.get("labelIds") or []) if isinstance(e, str)]
+    if not isinstance(hilo, str) or not ID_RE.match(hilo):
+        return None
+    cabeceras = {}
+    for h in (m.get("payload") or {}).get("headers") or []:
+        if isinstance(h, dict) and isinstance(h.get("name"), str) and isinstance(h.get("value"), str):
+            cabeceras.setdefault(h["name"].lower(), h["value"])  # La primera: la que pone Gmail al recibirlo.
+    direccion, nombre = remitente(cabeceras.get("from", ""))
+    return {
+        "id": mid, "hilo": hilo, "etiquetas": etiq, "cabeceras": cabeceras,
+        "autenticacion": cabeceras.get("authentication-results", ""),
+        "direccion": direccion, "de_texto": limpio(cabeceras.get("from", ""), 120), "nombre": nombre,
+        "asunto": limpio(cabeceras.get("subject", ""), 200), "extracto": limpio(m.get("snippet", ""), 300),
+        "ya": "INBOX" not in etiq or any(e in etiq for e in (*etiquetas.values(), "SENT", "DRAFT", "SPAM", "TRASH")),
+    }
+
+
+def aplicar(g, correo, clase, origen, etiquetas, avisos):
+    clase, origen = decidir(clase, origen, correo)
+    poner, quitar = [etiquetas[clase]], []
+    if clase == "publicidad":
+        quitar.append("INBOX")
+    if clase == "prioritario":
+        poner.append("STARRED")
+    g.cambiar_mensaje(correo["id"], poner, quitar)
+    anotar(correo["id"], "archivar" if quitar else "etiquetar", clase, origen)
+    if clase == "prioritario":
+        avisos.append({"hilo": correo["hilo"], "de": correo["nombre"], "asunto": limpio(correo["asunto"], 120), "hora": int(time.time())})
+
+
+def archivar_avisos_viejos(g):
+    hechos = 0
+    for mid in g.buscar(f'in:inbox label:"{ETIQUETAS["aviso"]}" older_than:{DIAS_AVISO}d'):
+        g.cambiar_mensaje(mid, quitar=["INBOX"])
+        anotar(mid, "archivar", "aviso", "pasados")
+        hechos += 1
+    return hechos
+
+
+def publicar(estado, nuevos=()):
+    """El panel solo ve esto: avisos saneados de las ultimas 48 h y el estado del vigilante."""
+    previos = leer_json(AVISOS, {}).get("avisos") or []
+    limite = time.time() - VIDA_AVISO_S
+    avisos = [a for a in [*previos, *nuevos] if isinstance(a, dict) and numero(a.get("hora"), limite, 1e11) is not None]
+    vistos, unicos = set(), []
+    for a in reversed(avisos):
+        if a.get("hilo") not in vistos and ID_RE.match(str(a.get("hilo"))):
+            vistos.add(a["hilo"])
+            unicos.append({"hilo": a["hilo"], "de": limpio(a.get("de"), 60), "asunto": limpio(a.get("asunto"), 120), "hora": int(a["hora"])})
+    puede, motivo = ia_disponible(estado)
+    escribir_json(AVISOS, {
+        "hora": int(time.time()), "pausa": PAUSA.exists(), "conectado": TOKEN.exists(),
+        "ia": "ok" if puede else limpio(motivo, 60), "error": limpio(estado.get("error"), 160),
+        "avisos": unicos[:MAX_AVISOS],
+    }, 0o640)
+
+
+def ciclo():
+    estado = leer_json(ESTADO, {})
+    if PAUSA.exists():
+        publicar(estado)
+        return 0
+    nuevos = []
+    try:
+        g = Gmail(acceso())
+        etiquetas = asegurar_etiquetas(g)
+        if not HISTORIA_RE.match(str(estado.get("historia", ""))):
+            # La primera vez solo se marca el punto de partida: lo antiguo ya lo ordenaste tu.
+            estado["historia"] = str(g.perfil().get("historyId", ""))
+            estado.pop("error", None)
+            return 0
+        try:
+            ids, ultimo = g.historial(estado["historia"])
+        except ErrorGmail as e:
+            if e.codigo != 404:
+                raise
+            estado["historia"] = str(g.perfil().get("historyId", ""))  # Historial caducado: se sigue desde ahora.
+            ids, ultimo = [], estado["historia"]
+        pendientes = [p for p in estado.get("pendientes", []) if isinstance(p, str) and ID_RE.match(p)]
+        cola = list(dict.fromkeys([*pendientes, *ids]))
+        sobrante = cola[MAX_POR_CICLO:]
+        reglas = leer_reglas(REGLAS.read_text(encoding="utf-8")) if REGLAS.exists() else {c: [] for c in CLASES}
+        sin_regla = []
+        for mid in cola[:MAX_POR_CICLO]:
+            try:
+                correo = leer_correo(g, mid, etiquetas)
+            except ErrorGmail as e:
+                if e.codigo == 404:
+                    continue  # Ya no existe: lo borraste tu.
+                raise
+            if correo is None or correo["ya"]:
+                continue
+            clase = segun_reglas(reglas, correo)
+            if clase:
+                aplicar(g, correo, clase, "regla", etiquetas, nuevos)
+            else:
+                sin_regla.append(correo)
+        intentos = {k: v for k, v in (estado.get("intentos") or {}).items() if isinstance(k, str) and isinstance(v, int)}
+        quedan = []
+        for i in range(0, len(sin_regla), POR_LLAMADA_IA):
+            lote = sin_regla[i:i + POR_LLAMADA_IA]
+            puede, _ = ia_disponible(estado)
+            clases = preguntar_ia(estado, lote) if puede else None
+            if clases is None:
+                for c in lote:
+                    # Si el clasificador contesta con error una y otra vez, el correo no se queda dando vueltas.
+                    if estado["ia"].get("fallo_respuesta"):
+                        intentos[c["id"]] = intentos.get(c["id"], 0) + 1
+                    if intentos.get(c["id"], 0) >= MAX_INTENTOS_IA:
+                        aplicar(g, c, "revisar", "ia-fallida", etiquetas, nuevos)
+                        intentos.pop(c["id"], None)
+                    else:
+                        quedan.append(c["id"])
+                continue
+            for n, correo in enumerate(lote, 1):
+                aplicar(g, correo, clases[n], "ia", etiquetas, nuevos)
+                intentos.pop(correo["id"], None)
+        estado["pendientes"] = (quedan + sobrante)[:MAX_PENDIENTES]
+        estado["intentos"] = {k: v for k, v in intentos.items() if k in estado["pendientes"]}
+        archivar_avisos_viejos(g)
+        estado["historia"] = ultimo
+        estado["ultimo_ciclo"] = ahora_iso()
+        estado.pop("error", None)
+        return 0
+    except ErrorGmail as e:
+        estado["error"] = str(e)
+        print(f"oficina-correo: {e}", file=sys.stderr)
+        return 0 if e.codigo == SIN_CONECTAR else 1
+    finally:
+        escribir_json(ESTADO, estado)
+        publicar(estado, nuevos)
+
+
+# ----------------------------------------------------------------- ordenes
+
+def ver_estado():
+    e = leer_json(ESTADO, {})
+    puede, motivo = ia_disponible(e)
+    print(f"Conectado: {'sí' if TOKEN.exists() else 'no'}")
+    print(f"En pausa: {'sí' if PAUSA.exists() else 'no'}")
+    print(f"Última pasada: {limpio(e.get('ultimo_ciclo'), 40) or 'ninguna'}")
+    print(f"IA: {'disponible' if puede else limpio(motivo, 60)} ({numero(e.get('ia', {}).get('llamadas'), 0, 10**6) or 0} llamadas hoy)")
+    print(f"Pendientes de clasificar: {len(e.get('pendientes', []))}")
+    if e.get("error"):
+        print(f"Último error: {limpio(e['error'], 200)}")
+    try:
+        lineas = REGISTRO.read_text(encoding="utf-8").splitlines()[-10:]
+    except OSError:
+        lineas = []
+    if lineas:
+        print("Últimas acciones:")
+        for l in lineas:
+            print("  " + limpio(l.replace("\t", "  "), 200))
+
+
+def deshacer(fecha):
+    if not FECHA_RE.match(fecha):
+        sys.exit("Fecha no válida: usa AAAA-MM-DD")
+    objetivos = []
+    try:
+        for l in REGISTRO.read_text(encoding="utf-8").splitlines():
+            p = l.split("\t")
+            if len(p) in (5, 6) and p[0][:10] >= fecha and p[2] == "archivar" and ID_RE.match(p[1]):
+                clave = (p[1], len(p) == 6 and p[5] == "m")
+                if clave not in objetivos:
+                    objetivos.append(clave)
+    except OSError:
+        pass
+    if not objetivos:
+        print("No hay nada archivado desde esa fecha.")
+        return
+    g = Gmail(acceso())
+    for ident, es_mensaje in objetivos:
+        try:
+            (g.cambiar_mensaje if es_mensaje else g.cambiar_hilo)(ident, poner=["INBOX"])
+            anotar(ident, "devolver", "-", "deshacer", "m" if es_mensaje else "h")
+        except ErrorGmail as e:
+            print(f"  {ident}: {e}")
+    print(f"Devueltos a la bandeja: {len(objetivos)}.")
+
+
+def conectar():
+    """Autorizacion de escritorio con PKCE: el navegador de Windows vuelve a 127.0.0.1 en WSL."""
+    cliente = leer_json(CLIENTE, {})
+    if not cliente.get("client_id"):
+        sys.exit("Falta el cliente: ejecuta «sudo oficina-correo conectar <cliente.json>».")
+    verificador = secrets.token_urlsafe(64)
+    reto = base64.urlsafe_b64encode(hashlib.sha256(verificador.encode()).digest()).rstrip(b"=").decode()
+    marca = secrets.token_urlsafe(24)
+    recibido = {}
+
+    class Vuelta(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            q = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+            if q.get("state", [""])[0] == marca and "code" in q:
+                recibido["code"] = q["code"][0]
+                texto = "Listo: ya puedes cerrar esta pestaña y volver a la terminal."
+            else:
+                texto = "Esta respuesta no es la que esperaba la Oficina."
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(texto.encode())
+
+        def log_message(self, *_):
+            pass
+
+    servidor = http.server.HTTPServer(("127.0.0.1", 0), Vuelta)
+    servidor.timeout = 300
+    vuelta = f"http://127.0.0.1:{servidor.server_port}/"
+    url = AUTORIZAR_URL + "?" + urllib.parse.urlencode({
+        "client_id": cliente["client_id"], "redirect_uri": vuelta, "response_type": "code", "scope": ALCANCE,
+        "access_type": "offline", "prompt": "consent", "state": marca, "code_challenge": reto, "code_challenge_method": "S256",
+    })
+    print("Abre esta dirección en el navegador del PC e inicia sesión con tu cuenta de Gmail:\n")
+    print(url + "\n")
+    print("Esperando la respuesta (5 minutos como mucho)...")
+    hilo = threading.Thread(target=lambda: [servidor.handle_request() for _ in range(20) if "code" not in recibido], daemon=True)
+    hilo.start()
+    hilo.join(300)
+    servidor.server_close()
+    if "code" not in recibido:
+        sys.exit("No ha llegado la autorización.")
+    r = pedir_token({"client_id": cliente["client_id"], "client_secret": cliente.get("client_secret", ""), "code": recibido["code"],
+                     "code_verifier": verificador, "redirect_uri": vuelta, "grant_type": "authorization_code"})
+    if not isinstance(r.get("refresh_token"), str):
+        sys.exit("Google no ha dado un permiso permanente. Quita el acceso de la app en tu cuenta de Google y repite.")
+    if ALCANCE not in str(r.get("scope", "")).split():
+        sys.exit("No se ha concedido el permiso de Gmail: repite y marca la casilla de Gmail.")
+    escribir_json(TOKEN, {"refresh_token": r["refresh_token"], "fecha": ahora_iso()})
+    estado = leer_json(ESTADO, {})
+    estado.pop("historia", None)  # Empieza desde ahora.
+    escribir_json(ESTADO, estado)
+    print("Cuenta conectada. El vigilante empieza en la próxima pasada (5 minutos como mucho).")
+
+
+def validar_cliente(texto):
+    try:
+        d = json.loads(texto)
+    except ValueError:
+        return None
+    c = d.get("installed") if isinstance(d, dict) else None
+    if not isinstance(c, dict) or not isinstance(c.get("client_id"), str) or not re.fullmatch(r"[0-9A-Za-z._-]{10,200}\.apps\.googleusercontent\.com", c["client_id"]):
+        return None
+    secreto = c.get("client_secret", "")
+    if not isinstance(secreto, str) or len(secreto) > 200:
+        return None
+    return {"installed": {"client_id": c["client_id"], "client_secret": secreto}}
+
+
+def guardar_cliente():
+    """Como `correo`: recibe el cliente ya revisado por la entrada estandar y lo guarda el mismo."""
+    c = validar_cliente(sys.stdin.read(16 * 1024))
+    if c is None:
+        sys.exit("Cliente OAuth no válido.")
+    escribir_json(CLIENTE, c["installed"])
+
+
+def preparar_cliente(ruta):
+    """Con sudo: root solo lee y revisa tu archivo. No escribe ni cambia nada en la carpeta de `correo`."""
+    try:
+        with open(ruta, encoding="utf-8") as f:
+            texto = f.read(16 * 1024)
+    except OSError:
+        sys.exit("No se puede leer ese archivo del cliente OAuth.")
+    c = validar_cliente(texto)
+    if c is None:
+        sys.exit("Ese archivo no es un cliente OAuth de tipo «Aplicación de escritorio».")
+    r = subprocess.run(["runuser", "-u", USUARIO, "--", *ENTORNO_LIMPIO, sys.executable, "-I", os.path.abspath(sys.argv[0]), "_guardar-cliente"],
+                       input=json.dumps(c), text=True, check=False)
+    if r.returncode != 0:
+        sys.exit("No se ha podido guardar el cliente.")
+
+
+def como_correo():
+    """Las ordenes que tocan los datos corren siempre como `correo`, aunque se lancen con sudo, y sin heredar el entorno."""
+    if ES_ROOT:
+        os.execvp("runuser", ["runuser", "-u", USUARIO, "--", *ENTORNO_LIMPIO, sys.executable, "-I", os.path.abspath(sys.argv[0]), *sys.argv[1:]])
+
+
+def aplicar_reglas():
+    if not ES_ROOT:
+        sys.exit("Ejecútalo con sudo: las reglas en uso no las puede cambiar ningún agente.")
+    try:
+        nuevo = leer_boveda()
+    except (OSError, UnicodeDecodeError) as e:
+        sys.exit(f"No se puede leer «Conocimiento/Correo - reglas.md» de la bóveda como archivo normal ({type(e).__name__}: {e}). "
+                 "Si es un enlace, una carpeta o un archivo enorme, no se usa.")
+    raras = lineas_raras(nuevo)
+    if raras:
+        sys.exit(f"El archivo de reglas tiene caracteres de control o invisibles en las líneas {', '.join(map(str, raras[:20]))}. "
+                 "Podrían esconder cambios en la pantalla: no se aplica. Quítalos y repite.")
+    viejo = REGLAS.read_text(encoding="utf-8") if REGLAS.exists() else ""
+    cambios = list(difflib.unified_diff(viejo.splitlines(), nuevo.splitlines(), "en uso", "bóveda", lineterm=""))
+    if not cambios:
+        print("Las reglas de la bóveda ya son las que están en uso.")
+        return
+    print("\n".join(cambios))
+    r = leer_reglas(nuevo)
+    print("\nQuedarían: " + ", ".join(f"{ETIQUETAS[c]} {len(r[c])}" for c in CLASES))
+    if input("\n¿Aplicar estos cambios? Escribe «aplicar»: ").strip() != "aplicar":
+        sys.exit("No se ha cambiado nada.")
+    REGLAS.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(prefix=".correo-reglas.", dir=REGLAS.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            os.fchmod(f.fileno(), 0o644)
+            f.write(nuevo)
+        os.replace(tmp, REGLAS)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
+    print("Reglas aplicadas.")
+
+
+def con_cerrojo(esperar):
+    """Una sola orden a la vez sobre estado.json: el temporizador y tus ordenes no se pisan."""
+    fd = os.open(CERROJO, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        if not esperar:
+            os.close(fd)
+            return None
+        print("Esperando a que termine la pasada en curso...", file=sys.stderr)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+    return fd
+
+
+def main():
+    os.umask(0o077)
+    args = sys.argv[1:]
+    orden = args[0] if args else ""
+    if orden == "reglas":
+        return aplicar_reglas()
+    if orden == "conectar" and len(args) == 2 and ES_ROOT:
+        preparar_cliente(args[1])
+    como_correo()
+    if orden == "_guardar-cliente":
+        return guardar_cliente()
+    if orden == "estado":
+        return ver_estado()
+    if orden not in ("ciclo", "pausar", "reanudar", "conectar", "deshacer"):
+        print(__doc__)
+        return 2
+    cerrojo = con_cerrojo(esperar=orden != "ciclo")
+    if cerrojo is None:
+        return 0  # Ya hay una pasada en marcha.
+    if orden == "ciclo":
+        return ciclo()
+    if orden == "pausar":
+        PAUSA.touch()
+        publicar(leer_json(ESTADO, {}))
+        print("Vigilante en pausa.")
+        return 0
+    if orden == "reanudar":
+        PAUSA.unlink(missing_ok=True)
+        e = leer_json(ESTADO, {})
+        e.setdefault("ia", {}).pop("pago", None)
+        escribir_json(ESTADO, e)
+        publicar(e)
+        print("Vigilante en marcha.")
+        return 0
+    if orden == "conectar" and len(args) in (1, 2):
+        return conectar()
+    if orden == "deshacer" and len(args) == 2:
+        return deshacer(args[1])
+    print(__doc__)
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main() or 0)

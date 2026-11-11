@@ -1,0 +1,20 @@
+---
+// Plantilla orientativa (RGPD y LOPDGDD). Ajusta los tratamientos a lo que haga de verdad la web.
+import Base from "../layouts/Base.astro";
+import sitio from "../../sitio.config.json";
+---
+<Base titulo={`Política de privacidad | ${sitio.nombre}`} descripcion={`Política de privacidad de ${sitio.nombre}: qué datos se tratan, para qué, durante cuánto tiempo y cómo ejercer tus derechos.`} indexar={false}>
+  <div class="legal">
+    <h1>Política de privacidad</h1>
+    <h2>Responsable</h2>
+    <p>El responsable del tratamiento es {sitio.titular.nombre}, con los datos del <a href="/aviso-legal/">aviso legal</a>.</p>
+    <h2>Qué datos se tratan y para qué</h2>
+    <p>Esta web no usa formularios ni analítica de terceros. Si escribes al correo de contacto, tus datos se usan solo para responderte, con base en tu consentimiento al escribir.</p>
+    <h2>Cuánto tiempo</h2>
+    <p>Lo necesario para atender tu consulta y, después, durante los plazos que exija la ley.</p>
+    <h2>A quién se ceden</h2>
+    <p>A nadie, salvo obligación legal. El proveedor de alojamiento puede registrar datos técnicos de las visitas (como la dirección IP) por seguridad.</p>
+    <h2>Tus derechos</h2>
+    <p>Puedes pedir acceso, rectificación, supresión, oposición, limitación y portabilidad escribiendo a {sitio.titular.email}. Si no te atendemos bien, puedes reclamar ante la Agencia Española de Protección de Datos (aepd.es).</p>
+  </div>
+</Base>

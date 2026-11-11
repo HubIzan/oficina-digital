@@ -1,0 +1,9 @@
+{
+  "identifier": "isla-remota",
+  "description": "Lo unico que el panel puede pedirle a la ventana: nada de archivos, ventanas ni procesos.",
+  "windows": ["isla"],
+  "remote": {
+    "urls": ["http://localhost:8787/*", "http://100.64.0.10:8787/*"]
+  },
+  "permissions": ["allow-fijar-zona", "allow-guardar-medicion", "allow-salir", "allow-abrir-panel", "allow-pantalla-completa", "allow-enfocar", "allow-devolver-foco", "allow-esperar-evento", "allow-anotar", "allow-abrir-vista", "allow-abrir-gmail"]
+}

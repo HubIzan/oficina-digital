@@ -1,0 +1,1 @@
+# Dependencias aprobadas en la especificacion, con version fija. Solo desde PyPI.

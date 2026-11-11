@@ -1,0 +1,7 @@
+# __NOMBRE__
+
+> PENDIENTE: una o dos frases que expliquen qué es esta web y a quién sirve, escritas para que un asistente de IA pueda citarlas.
+
+## Páginas
+
+- [Portada](https://sin-dominio.invalid/): PENDIENTE

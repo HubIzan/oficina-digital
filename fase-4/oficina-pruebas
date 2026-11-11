@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# Servicio de tests para agente: sin acceso a Docker, solo puede pedir un proyecto y, si quiere, un commit.
+# Una conexion, una peticion. La ultima linea de la salida es: __CODIGO__ <n>
+# Se construye siempre desde una copia privada: lo que se comprueba aqui es lo que llega a Docker,
+# aunque un proceso del agente cambie el proyecto mientras tanto.
+set -u
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+
+terminar() { printf '%s\n__CODIGO__ %s\n' "${2:-}" "$1"; exit 0; }
+como_clones() { timeout 600 setpriv --reuid=clones --regid=clones --clear-groups --no-new-privs "$@"; }
+
+IFS= read -r -t 10 peticion || terminar 2 "Sin peticion."
+nombre="${peticion%% *}"
+sha=""
+[ "$nombre" = "$peticion" ] || sha="${peticion#* }"
+[[ "$nombre" =~ ^[a-z0-9][a-z0-9-]{0,62}$ ]] || terminar 2 "Nombre no valido."
+[ -z "$sha" ] || [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || terminar 2 "Commit no valido."
+p="/srv/oficina/proyectos/$nombre"
+[ -d "$p" ] && [ ! -L "$p" ] || terminar 2 "No existe el proyecto."
+
+t="$(mktemp -d /var/tmp/oficina-pruebas.XXXXXX)" || terminar 2 "No se puede crear la copia."
+trap 'rm -rf "$t"' EXIT
+chmod 0700 "$t"
+chown clones:clones "$t"
+c="$t/contexto"
+# clones solo lee: ni el codigo de agente ni un fallo de Git al leerlo llegan a root.
+if [ -n "$sha" ]; then
+  como_clones /usr/local/sbin/oficina-clon "$p/.git" "$c" "$sha" --sin-git 2>&1 | tail -n 5
+  [ "${PIPESTATUS[0]}" -eq 0 ] || terminar 2 "No se ha podido sacar ese commit."
+else
+  como_clones bash -c 'mkdir "$1" && cd "$2" && tar --exclude=./.git --exclude=./node_modules -cf - . | tar -xf - --no-same-owner -C "$1" && [ "${PIPESTATUS[0]}" -eq 0 ]' _ "$c" "$p" 2>&1 | tail -n 5
+  [ "${PIPESTATUS[0]}" -eq 0 ] || terminar 2 "No se ha podido copiar el proyecto."
+fi
+
+[ -f "$c/Dockerfile" ] && [ ! -L "$c/Dockerfile" ] || terminar 2 "No hay un Dockerfile normal."
+# "# syntax=" haria que Docker ejecutase un constructor elegido por el proyecto.
+grep -qiE '^[[:space:]]*#[[:space:]]*syntax[[:space:]]*=' "$c/Dockerfile" && terminar 2 "Dockerfile con directiva syntax: no permitido."
+
+imagen="oficina-prueba-$nombre"
+timeout 900 docker build --progress=plain --target test -t "$imagen" "$c" 2>&1 | tail -n 40
+[ "${PIPESTATUS[0]}" -eq 0 ] || terminar 1 "Ha fallado la construccion."
+timeout 900 docker run --rm --network none --cap-drop ALL --security-opt no-new-privileges \
+  --pids-limit 512 --memory 4g --cpus 4 "$imagen" 2>&1 | tail -c 200000
+terminar "${PIPESTATUS[0]}"

@@ -1,0 +1,13 @@
+table inet oficina_panel
+delete table inet oficina_panel
+table inet oficina_panel {
+  # En este PC, el navegador de Windows entra por el reenvio de WSL, que en Linux es root.
+  # Ningun otro usuario de Ubuntu (agente, panel, boveda, syncthing, usuario) llega al panel por aqui.
+  chain salida {
+    type filter hook output priority filter; policy accept;
+    oifname "lo" tcp dport 8787 meta skuid != 0 reject with tcp reset
+    # El panel solo responde: si alguien lo comprometiera, no podria sacar nada ni hablar con la red.
+    meta skuid "panel" ip daddr != 127.0.0.0/8 ct state new reject
+    meta skuid "panel" ip6 daddr != ::1 ct state new reject
+  }
+}

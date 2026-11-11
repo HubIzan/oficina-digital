@@ -1,0 +1,9 @@
+{
+  "name": "__NOMBRE__",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test",
+    "publicable": "PUBLICAR=1 node --test"
+  }
+}

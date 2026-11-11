@@ -1,0 +1,12 @@
+---
+// Si algun dia se anade analitica o algo de terceros que use cookies, hace falta banner de consentimiento y cambiar esta pagina.
+import Base from "../layouts/Base.astro";
+import sitio from "../../sitio.config.json";
+---
+<Base titulo={`Política de cookies | ${sitio.nombre}`} descripcion={`Política de cookies de ${sitio.nombre}: esta web no instala cookies de seguimiento ni de publicidad, solo las técnicas imprescindibles.`} indexar={false}>
+  <div class="legal">
+    <h1>Política de cookies</h1>
+    <p>Esta web no instala cookies de análisis, de publicidad ni de terceros. Por eso no te pide consentimiento.</p>
+    <p>Si en el futuro se añadiera alguna, se explicaría aquí y se pediría tu permiso antes de instalarla.</p>
+  </div>
+</Base>

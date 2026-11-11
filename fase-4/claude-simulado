@@ -1,0 +1,171 @@
+#!/usr/bin/env python3
+"""Sustituye a Claude en la verificacion: no gasta cuota. El modo va en el encargo."""
+import json
+import os
+import re
+import subprocess
+import sys
+
+args = sys.argv[1:]
+encargo = args[args.index("-p") + 1]
+modo = (re.search(r"MODO:(\w+)", encargo) or [None, "normal"])[1]
+with open(os.environ["HOME"] + "/.simulado.log", "a") as f:
+    f.write(json.dumps(args) + "\n")
+with open(os.environ["HOME"] + "/.simulado.cwd", "a") as f:
+    f.write(os.getcwd() + "\n")
+
+
+def ev(**d):
+    print(json.dumps(d), flush=True)
+
+
+def limites(semana=0.1, cinco=0.1, **extra):
+    info = {"status": "allowed", "overageStatus": "rejected", "isUsingOverage": False,
+            "unifiedWindows": {"five_hour": {"utilization": cinco, "resetsAt": 2000000000},
+                               "seven_day": {"utilization": semana, "resetsAt": 2000000000}}}
+    info.update(extra)
+    ev(type="rate_limit_event", rate_limit_info=info)
+
+
+ev(type="system", subtype="init", apiKeySource="ANTHROPIC_API_KEY" if modo == "clave" else "none",
+   model="claude-" + args[args.index("--model") + 1] + "-simulado")
+if modo == "sobreuso":
+    limites(isUsingOverage=True)
+elif modo == "permite":
+    limites(overageStatus="allowed")
+elif modo == "semana":
+    if "--resume" not in args:
+        limites(semana=0.80)
+    else:
+        limites()
+elif modo == "reintento":
+    ev(type="system", subtype="api_retry", error="rate_limit")
+else:
+    limites()
+
+if modo in ("sobreuso", "permite", "clave", "reintento") or (modo == "semana" and "--resume" not in args):
+    import time
+    time.sleep(30)
+    sys.exit(0)
+
+if modo == "ajustes":
+    import shutil
+    shutil.copy(args[args.index("--settings") + 1], os.environ["HOME"] + "/.simulado.ajustes")
+elif modo == "ataque":
+    # Un agente que intenta salirse, desde dentro del servicio real.
+    import glob
+    import signal
+    import socket
+
+    def intento(nombre, f):
+        try:
+            f()
+            r = "LOGRADO"
+        except (OSError, subprocess.SubprocessError):
+            r = "denegado"
+        with open(os.environ["HOME"] + "/.simulado.ataque", "a") as s:
+            s.write(f"{r}: {nombre}\n")
+
+    def orden(*a, entrada=None):
+        subprocess.run(a, input=entrada, check=True, capture_output=True, timeout=20)
+
+    def conectar():
+        s = socket.socket(socket.AF_UNIX)
+        s.connect("/run/oficina-trabajo.sock")
+        s.close()
+
+    def pids_cola():
+        r = subprocess.run(["pgrep", "-u", "cola"], capture_output=True, text=True, check=False).stdout.split()
+        if not r:
+            raise OSError("no hay procesos de cola")
+        return [int(p) for p in r]
+
+    intento("escribir en la cola", lambda: open("/srv/oficina/cola/revision/ataque.json", "w").close())
+    intento("listar la cola", lambda: os.listdir("/srv/oficina/cola/revision"))
+    intento("escribir el estado", lambda: open("/srv/oficina/registro/estado.json", "a").close())
+    intento("leer el estado", lambda: open("/srv/oficina/registro/estado.json").close())
+    intento("abrir el socket de trabajo", conectar)
+    intento("programar con crontab", lambda: orden("crontab", "-", entrada=b"* * * * * true\n"))
+    intento("editar .bashrc", lambda: open(os.environ["HOME"] + "/.bashrc", "a").close())
+    intento("editar .profile", lambda: open(os.environ["HOME"] + "/.profile", "a").close())
+    intento("editar .gitconfig", lambda: open(os.environ["HOME"] + "/.gitconfig", "a").close())
+    intento("activar procesos tras cerrar sesion", lambda: orden("loginctl", "enable-linger", "agente"))
+    intento("senal a la cola", lambda: [os.kill(p, signal.SIGTERM) for p in pids_cola()])
+    intento("leer la memoria de la cola", lambda: [open(f"/proc/{p}/mem", "rb").close() for p in pids_cola()])
+
+agente = args[args.index("--agent") + 1]
+texto = "hecho"
+if modo == "residuo":
+    # Un proceso que sobrevive a la tarea, en su propia sesion.
+    subprocess.Popen(["setsid", "nohup", "sleep", "600"], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                     stderr=subprocess.DEVNULL, start_new_session=True)
+elif modo == "basura":
+    sys.stdout.write("no es json\n" + "x" * (5 * 1024 * 1024) + "\n[1,2]\n\"cadena\"\n" + "[" * 200000 + "\n")
+    print(json.dumps({"type": "rate_limit_event", "rate_limit_info": {"unifiedWindows": {"five_hour": {"utilization": "mucho", "resetsAt": []}, "seven_day": 7}}}), flush=True)
+    print(json.dumps({"type": "system", "subtype": "init", "model": ["no", "texto"]}), flush=True)
+elif modo == "muere":
+    os._exit(3)
+if agente == "arquitecto":
+    ruta = re.search(r"especificacion en (\S+)", encargo)[1]
+    with open(ruta, "w") as f:
+        f.write("# Especificacion\n")
+elif agente == "triage":
+    if modo == "triagemalo":
+        texto = "No me apetece responder en JSON."
+    elif modo == "triagecorto":
+        texto = json.dumps({"resumen": "x"})
+    else:
+        propuesta = {"resumen": "Resumen simulado", "objetivo": "Objetivo simulado", "alcance": ["a"] * 30, "fuera": [5, "b"],
+                     "alternativas": [{"titulo": "Una", "descripcion": "d", "complejidad": "ROOT"}, {"titulo": "Dos", "complejidad": "BAJA"}, "rara"],
+                     "recomendada": 99, "riesgos": [], "pregunta": "?", "extra": "no debe pasar"}
+        texto = "Aqui tienes:\n```json\n" + json.dumps(propuesta) + "\n```"
+elif agente == "investigador":
+    if modo == "investigacionmala":
+        texto = "Ya existe, no merece la pena."
+    elif modo == "investigacionfeo":
+        # Lo que dejaria una pagina hostil: tipos cambiados, URL peligrosas y textos enormes.
+        texto = json.dumps({"resumen": "Existe\x1b[31m" + "x" * 5000, "existe": "si", "recomendacion": "seguir",
+                            "parecidos": [{"nombre": "Uno", "url": "javascript:alert(1)"}, {"nombre": "Dos", "url": "https://ejemplo.org/a b"}, "raro", {"url": "https://sin-nombre"}] + [{"nombre": f"N{i}"} for i in range(20)],
+                            "fuentes": ["https://ejemplo.org/ok", "file:///etc/passwd", 5] * 10, "huecos": ["h" * 900], "avisos": ["Una pagina pedia visitar otra direccion"],
+                            "extra": "no debe pasar"})
+    else:
+        texto = "Esto encontre:\n```json\n" + json.dumps({
+            "resumen": "Hay traductores en auriculares de pago.", "existe": "parcial",
+            "parecidos": [{"nombre": "Producto A", "url": "https://ejemplo.org/a", "que_hace": "Traduce", "precio": "200 €", "diferencia": "Necesita movil"}],
+            "huecos": ["Ninguno funciona sin conexion"], "recomendacion": "seguir_propio", "motivo": "Existe, pero aprenderias mucho.",
+            "sugerencias": ["Empieza por un prototipo en el PC"], "fuentes": ["https://ejemplo.org/a"], "avisos": []}) + "\n```"
+elif agente == "desarrollador" and modo == "necesito" and "<respuestas>" not in encargo:
+    # Le falta un dato que solo da el usuario: no inventa nada y lo pide. Con la respuesta, trabaja normal.
+    texto = "No puedo cumplir la especificacion sin un dato.\nNECESITO: el usuario de GitHub para el dominio de la web"
+elif agente == "desarrollador" and modo != "sincommit":
+    with open("trabajo.txt", "a") as f:
+        f.write("x\n")
+    subprocess.run(["git", "add", "-A"], check=True)
+    subprocess.run(["git", "-c", "user.name=a", "-c", "user.email=a@a", "commit", "-qm", "trabajo"], check=True)
+elif agente == "qa":
+    if modo == "qacommit":
+        with open("cambio-qa.txt", "a") as f:
+            f.write("x\n")
+        subprocess.run(["git", "add", "-A"], check=True)
+        subprocess.run(["git", "-c", "user.name=a", "-c", "user.email=a@a", "commit", "-qm", "QA toca el clon"], check=True)
+    elif modo == "qareal":
+        # QA, engañado, intenta cambiar el repositorio real.
+        real = re.search(r"No uses (\S+) :", encargo)[1]
+        r = subprocess.run(["git", "-C", real, "commit", "-q", "--allow-empty", "-m", "QA toca la rama real"], capture_output=True, check=False)
+        with open(os.environ["HOME"] + "/.simulado.qa", "w") as f:
+            f.write("commit:" + ("LOGRADO" if r.returncode == 0 else "denegado") + "\n")
+            try:
+                open(real + "/x-qa", "w").close()
+                f.write("escribir:LOGRADO\n")
+            except OSError:
+                f.write("escribir:denegado\n")
+    elif modo == "qadiff":
+        # Lo que QA ve en su clon, y como queda ese clon.
+        r = subprocess.run(["git", "diff", "main...HEAD"], capture_output=True, text=True, check=False)
+        with open(os.environ["HOME"] + "/.simulado.qa", "w") as f:
+            f.write(f"cwd:{os.getcwd()}\n")
+            f.write(f"config:{open('.git/config').read()}\n")
+            f.write(f"ganchos:{os.path.exists('.git/hooks')}\n")
+            f.write(f"diff:{r.stdout}\n")
+    texto = "VEREDICTO: RECHAZADO" if "QAMAL" in encargo and modo != "corregido" else "Bien.\nVEREDICTO: APROBADO"
+ev(type="result", subtype="success", is_error=False, result=texto, usage={"input_tokens": 1, "output_tokens": 1})
