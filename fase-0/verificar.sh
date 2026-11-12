@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Oficina Digital · © 2026 Izan Trompeta (HubIzan) · Licencia MIT · https://github.com/HubIzan/oficina-digital
 # Oficina Digital - Fase 0: verificacion. Se ejecuta como root y se puede repetir.
 # No inicia sesion en nada, no publica nada y no gasta cuota de Claude.
 set -u

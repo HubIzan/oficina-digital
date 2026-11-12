@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Oficina Digital · © 2026 Izan Trompeta (HubIzan) · Licencia MIT · https://github.com/HubIzan/oficina-digital
 """Pruebas aisladas del lanzador oficina-claude y de la limpieza de memorias de oficina-trabajo.
 
 Uso: python3 -I pruebas_lanzador.py <carpeta-con-cola/>

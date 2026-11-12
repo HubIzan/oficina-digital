@@ -1,3 +1,4 @@
+// Oficina Digital · © 2026 Izan Trompeta (HubIzan) · Licencia MIT · https://github.com/HubIzan/oficina-digital
 import { useMemo, useState } from "react";
 import { obtener } from "../datos.js";
 import VisorNota from "./VisorNota.jsx";

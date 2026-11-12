@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Oficina Digital · © 2026 Izan Trompeta (HubIzan) · Licencia MIT · https://github.com/HubIzan/oficina-digital
 # Copia de seguridad de la Oficina. Se ejecuta como root; se puede repetir.
 # Nunca rehace la clave ni el repositorio si ya existen.
 set -euo pipefail

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Oficina Digital · © 2026 Izan Trompeta (HubIzan) · Licencia MIT · https://github.com/HubIzan/oficina-digital
 # Deshace instalar-lanzador.sh con la copia más antigua (la de antes de la primera instalación). Se ejecuta con sudo.
 set -euo pipefail
 [ "$(id -u)" = 0 ] || { echo "Ejecutalo con sudo."; exit 1; }

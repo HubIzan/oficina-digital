@@ -1,3 +1,4 @@
+# Oficina Digital · © 2026 Izan Trompeta (HubIzan) · Licencia MIT · https://github.com/HubIzan/oficina-digital
 # Construye con pnpm (version fija, sin scripts de instalacion salvo esbuild y sin versiones de menos de 7 dias).
 FROM node:26-slim AS construir
 RUN npm install --global --ignore-scripts pnpm@12.17.0

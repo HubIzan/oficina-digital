@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Oficina Digital · © 2026 Izan Trompeta (HubIzan) · Licencia MIT · https://github.com/HubIzan/oficina-digital
 # Deshace instalar-novedades.sh con la copia mas antigua (la de antes de la primera instalacion). Se ejecuta con sudo.
 # Las tareas con marca «opus» o con respuestas siguen en la cola: se hacen con Sonnet y sin ver las respuestas.
 set -euo pipefail

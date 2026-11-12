@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Oficina Digital · © 2026 Izan Trompeta (HubIzan) · Licencia MIT · https://github.com/HubIzan/oficina-digital
 # Comparte la copia cifrada con el portatil por Syncthing. Como root; se puede repetir.
 # No toca la carpeta de la boveda. La clave no viaja: el portatil solo guarda datos cifrados.
 set -euo pipefail

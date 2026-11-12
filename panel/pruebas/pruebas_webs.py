@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Oficina Digital · © 2026 Izan Trompeta (HubIzan) · Licencia MIT · https://github.com/HubIzan/oficina-digital
 """Pruebas del creador de webs, aisladas: carpetas temporales y sin tocar el panel en marcha.
 
     python -I pruebas_webs.py <carpeta con las versiones nuevas>   (con un Python que tenga Pillow)

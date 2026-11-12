@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Oficina Digital · © 2026 Izan Trompeta (HubIzan) · Licencia MIT · https://github.com/HubIzan/oficina-digital
 # Lanzador de Claude Code para la Oficina: se niega a arrancar si algo
 # pudiera desviar el uso de la suscripcion a un pago por uso.
 set -euo pipefail

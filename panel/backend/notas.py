@@ -1,3 +1,4 @@
+# Oficina Digital · © 2026 Izan Trompeta (HubIzan) · Licencia MIT · https://github.com/HubIzan/oficina-digital
 """Convierte notas de Oficina/ en HTML seguro. Los agentes pueden escribir estas notas."""
 import functools
 import os

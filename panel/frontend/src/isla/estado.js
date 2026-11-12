@@ -1,3 +1,4 @@
+// Oficina Digital · © 2026 Izan Trompeta (HubIzan) · Licencia MIT · https://github.com/HubIzan/oficina-digital
 // Convierte el estado del panel en lo que muestra la isla. Sin dependencias del navegador, para probarlo.
 // Regla principal: si no se sabe, no se pinta de verde.
 

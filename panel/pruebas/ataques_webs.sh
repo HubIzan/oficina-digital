@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Oficina Digital · © 2026 Izan Trompeta (HubIzan) · Licencia MIT · https://github.com/HubIzan/oficina-digital
 # Ataques al creador de webs del panel en marcha: subida de imagenes y encargos. Como root; no llama a Claude.
 set -u
 HUMANO="$(getent passwd 1000 | cut -d: -f1)"

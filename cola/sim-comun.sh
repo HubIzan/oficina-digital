@@ -1,3 +1,4 @@
+# Oficina Digital · © 2026 Izan Trompeta (HubIzan) · Licencia MIT · https://github.com/HubIzan/oficina-digital
 # Cola y trabajo con Claude simulado, con los usuarios y el aislamiento reales. Se carga con source.
 # Los ajustes van en /run: si el PC se apaga a media prueba, desaparecen solos.
 SIM="/var/lib/oficina-sim-$$"

@@ -1,3 +1,4 @@
+// Oficina Digital · © 2026 Izan Trompeta (HubIzan) · Licencia MIT · https://github.com/HubIzan/oficina-digital
 // Ciclo de dia y noche segun el reloj del portatil, con neones y luces de sala.
 import { AdditiveBlending, CanvasTexture, Color, PointLight, SpriteMaterial, Sprite, SRGBColorSpace, Vector3 } from "three";
 import { LAMPARAS, MUEBLES, ROLES } from "./mundo.js";

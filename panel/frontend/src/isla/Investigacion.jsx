@@ -1,3 +1,4 @@
+// Oficina Digital · © 2026 Izan Trompeta (HubIzan) · Licencia MIT · https://github.com/HubIzan/oficina-digital
 // Decidir una investigacion desde la isla: el mismo detalle, frase y comprobaciones que en el panel.
 import { useCallback, useEffect, useState } from "react";
 import { enviar, pedir } from "../datos.js";

@@ -1,3 +1,4 @@
+// Oficina Digital · © 2026 Izan Trompeta (HubIzan) · Licencia MIT · https://github.com/HubIzan/oficina-digital
 // llms.txt: resumen para asistentes de IA. Añade aqui cada pagina importante con una frase que la explique.
 import type { APIRoute } from "astro";
 import sitio from "../../sitio.config.json";

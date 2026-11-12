@@ -1,3 +1,4 @@
+// Oficina Digital · © 2026 Izan Trompeta (HubIzan) · Licencia MIT · https://github.com/HubIzan/oficina-digital
 // Comprueba la planta sin navegador: node --test mundo.test.js
 import assert from "node:assert/strict";
 import { test } from "node:test";

@@ -1,3 +1,4 @@
+# Oficina Digital · © 2026 Izan Trompeta (HubIzan) · Licencia MIT · https://github.com/HubIzan/oficina-digital
 """Lee el estado de la Oficina. Todo lo que escriben los agentes se trata como no fiable."""
 import datetime
 import json

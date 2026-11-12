@@ -1,3 +1,4 @@
+# Oficina Digital · © 2026 Izan Trompeta (HubIzan) · Licencia MIT · https://github.com/HubIzan/oficina-digital
 """Dibuja el icono de la isla: un punto verde sobre una cápsula negra. Sin dependencias."""
 import pathlib
 import struct

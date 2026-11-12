@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Oficina Digital · © 2026 Izan Trompeta (HubIzan) · Licencia MIT · https://github.com/HubIzan/oficina-digital
 # Compila la carcasa de la isla en Docker y deja el resultado en /opt/oficina/isla/salida. Como root.
 set -euo pipefail
 D="$(cd "$(dirname "$0")" && pwd)"

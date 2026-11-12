@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Oficina Digital · © 2026 Izan Trompeta (HubIzan) · Licencia MIT · https://github.com/HubIzan/oficina-digital
 """Pruebas aisladas del vigilante de correo: Gmail falso, Claude falso, sin red y sin tocar nada real.
 
 Uso: python3 -I pruebas_correo.py <carpeta-con-correo/-y-panel/>

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Oficina Digital · © 2026 Izan Trompeta (HubIzan) · Licencia MIT · https://github.com/HubIzan/oficina-digital
 # Instala el paso «¿ya existe?» desde /opt/oficina-investigacion. Se ejecuta con sudo.
 # Guarda antes lo que cambia; para deshacerlo: sudo bash /opt/oficina/cola/revertir-investigacion.sh
 set -euo pipefail

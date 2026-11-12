@@ -1,4 +1,5 @@
 #!/usr/bin/python3 -I
+# Oficina Digital · © 2026 Izan Trompeta (HubIzan) · Licencia MIT · https://github.com/HubIzan/oficina-digital
 """Saca un commit exacto de un repositorio que puede estar manipulado, sin obedecer su configuracion.
 
   oficina-clon <.git de origen> <destino> <sha> [--rama <nombre>] [--main <sha>] [--sin-git]

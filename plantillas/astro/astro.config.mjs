@@ -1,3 +1,4 @@
+// Oficina Digital · © 2026 Izan Trompeta (HubIzan) · Licencia MIT · https://github.com/HubIzan/oficina-digital
 import sitemap from "@astrojs/sitemap";
 import { defineConfig } from "astro/config";
 import sitio from "./sitio.config.json" with { type: "json" };

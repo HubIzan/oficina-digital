@@ -1,3 +1,4 @@
+// Oficina Digital · © 2026 Izan Trompeta (HubIzan) · Licencia MIT · https://github.com/HubIzan/oficina-digital
 // Correos importantes que ya has visto en este dispositivo. Solo es una comodidad: si se pierde,
 // los avisos vuelven a salir hasta que caducan (48 h), sin tocar nada en Gmail.
 const CLAVE = "isla-correo-vistos";

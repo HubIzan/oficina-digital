@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Oficina Digital · © 2026 Izan Trompeta (HubIzan) · Licencia MIT · https://github.com/HubIzan/oficina-digital
 # Segunda ronda: memoria automatica y habilidades del HOME, que siguen cargandose sin setting-sources.
 set -u
 T="$(mktemp -d /tmp/arranque-XXXXXX)"

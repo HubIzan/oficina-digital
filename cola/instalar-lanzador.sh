@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Oficina Digital · © 2026 Izan Trompeta (HubIzan) · Licencia MIT · https://github.com/HubIzan/oficina-digital
 # Instala desde /opt/oficina-lanzador, con sudo, lo que salió de revisar oficina-claude (2026-11-10):
 #  - oficina-claude arranca Claude con el entorno vacío (HOME, PATH y LANG) y siempre /usr/bin/claude
 #  - oficina-trabajo aparta antes de cada tarea las memorias que un agente pudo dejar en ~/.claude

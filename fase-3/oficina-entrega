@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Oficina Digital · © 2026 Izan Trompeta (HubIzan) · Licencia MIT · https://github.com/HubIzan/oficina-digital
 # Oficina Digital - entrega de proyectos. Se ejecuta con TU usuario.
 #   oficina-entrega nuevo <proyecto> <python|web>   crea el proyecto en local
 #   oficina-entrega probar <proyecto>               ejecuta los tests en Docker

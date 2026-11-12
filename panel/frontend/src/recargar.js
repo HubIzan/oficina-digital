@@ -1,3 +1,4 @@
+// Oficina Digital · © 2026 Izan Trompeta (HubIzan) · Licencia MIT · https://github.com/HubIzan/oficina-digital
 // Tras recompilar el panel, una pagina abierta de antes pide trozos que ya no existen.
 // Se recarga sola una vez (como mucho cada 30 s, para no entrar en bucle si el fallo es otro).
 const CLAVE = "izanlab-recarga";

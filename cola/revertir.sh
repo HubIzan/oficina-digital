@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Oficina Digital · © 2026 Izan Trompeta (HubIzan) · Licencia MIT · https://github.com/HubIzan/oficina-digital
 # Vuelve a la cola anterior desde la copia que hizo instalar.sh. Como root.
 # Lo que haya pasado en la cola despues de migrar se pierde, salvo lo que este en los repositorios.
 set -euo pipefail

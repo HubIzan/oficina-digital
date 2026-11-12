@@ -1,3 +1,4 @@
+// Oficina Digital · © 2026 Izan Trompeta (HubIzan) · Licencia MIT · https://github.com/HubIzan/oficina-digital
 // Se genera con el dominio de sitio.config.json: nunca se queda desfasado.
 import type { APIRoute } from "astro";
 

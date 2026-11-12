@@ -1,3 +1,4 @@
+// Oficina Digital · © 2026 Izan Trompeta (HubIzan) · Licencia MIT · https://github.com/HubIzan/oficina-digital
 // Estado en vivo del panel. Lo que escriben los agentes siempre se muestra como texto.
 const estado = {
   conectado: false,

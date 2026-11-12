@@ -1,3 +1,4 @@
+// Oficina Digital · © 2026 Izan Trompeta (HubIzan) · Licencia MIT · https://github.com/HubIzan/oficina-digital
 // Mide lo que importa en cada fase: el tiempo entre fotogramas, lo que tarda Motion dentro de cada uno
 // y las tareas largas que detectan el navegador. Si la pestana se oculta, el navegador frena los
 // fotogramas y la medicion no vale: queda marcada.

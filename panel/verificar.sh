@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Oficina Digital · © 2026 Izan Trompeta (HubIzan) · Licencia MIT · https://github.com/HubIzan/oficina-digital
 # Panel de IzanLab: verificacion. Se ejecuta como root; crea datos de prueba y los borra.
 set -u
 

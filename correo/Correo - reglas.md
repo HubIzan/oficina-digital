@@ -1,3 +1,4 @@
+<!-- Oficina Digital · © 2026 Izan Trompeta (HubIzan) · Licencia MIT · https://github.com/HubIzan/oficina-digital -->
 # Reglas del vigilante de correo (ejemplo)
 
 Copia este archivo a la bóveda como `Conocimiento/Correo - reglas.md`, pon tus remitentes y aplícalo con

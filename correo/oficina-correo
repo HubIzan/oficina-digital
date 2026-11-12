@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Oficina Digital · © 2026 Izan Trompeta (HubIzan) · Licencia MIT · https://github.com/HubIzan/oficina-digital
 """Vigilante de correo de la Oficina: ordena el Gmail con reglas fijas y, para lo demas, con Haiku.
 
 Corre como el usuario `correo`, el unico que puede leer el permiso de Google. Solo conoce estas

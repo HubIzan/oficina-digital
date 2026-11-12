@@ -1,3 +1,4 @@
+# Oficina Digital · © 2026 Izan Trompeta (HubIzan) · Licencia MIT · https://github.com/HubIzan/oficina-digital
 """Vista previa con datos inventados. Solo para pruebas: no lee nada de la Oficina."""
 import asyncio
 import itertools

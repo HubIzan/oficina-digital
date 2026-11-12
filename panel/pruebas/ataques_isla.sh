@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Oficina Digital · © 2026 Izan Trompeta (HubIzan) · Licencia MIT · https://github.com/HubIzan/oficina-digital
 # Etapa 5 de la isla: payloads hostiles contra el chat y sus rutas. Como root; no llama a Claude.
 # Pausa la cola y usa un proyecto desechable.
 set -u

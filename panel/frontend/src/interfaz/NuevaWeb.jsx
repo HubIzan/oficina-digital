@@ -1,3 +1,4 @@
+// Oficina Digital · © 2026 Izan Trompeta (HubIzan) · Licencia MIT · https://github.com/HubIzan/oficina-digital
 // Encargar una web: lo que pediria un cliente a una agencia. Nada se encarga sin la frase.
 import { useCallback, useEffect, useState } from "react";
 import { enviar, pedir, subir } from "../datos.js";

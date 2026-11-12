@@ -1,3 +1,4 @@
+<!-- Oficina Digital · © 2026 Izan Trompeta (HubIzan) · Licencia MIT · https://github.com/HubIzan/oficina-digital -->
 # __NOMBRE__
 
 Web estática de una página, creada con la plantilla **web profesional** de la Oficina.

@@ -1,3 +1,4 @@
+# Oficina Digital · © 2026 Izan Trompeta (HubIzan) · Licencia MIT · https://github.com/HubIzan/oficina-digital
 # Compila el .exe de Windows dentro de Linux. Con mingw no hace falta aceptar la licencia del SDK de Microsoft.
 FROM rust:1.99.0-slim-trixie AS compilar
 RUN apt-get update -qq \

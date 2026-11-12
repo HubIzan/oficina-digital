@@ -1,3 +1,4 @@
+// Oficina Digital · © 2026 Izan Trompeta (HubIzan) · Licencia MIT · https://github.com/HubIzan/oficina-digital
 import { useEffect, useState } from "react";
 import { obtener, pedir } from "../datos.js";
 import { NOMBRE_PERRO } from "../oficina3d/mundo.js";

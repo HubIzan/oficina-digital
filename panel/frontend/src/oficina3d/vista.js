@@ -1,3 +1,4 @@
+// Oficina Digital · © 2026 Izan Trompeta (HubIzan) · Licencia MIT · https://github.com/HubIzan/oficina-digital
 // Camara isometrica: encuadre general, zoom por pasos, arrastre y viaje suave a cada sala.
 import { Vector3 } from "three";
 import { ALTO, ANCHO, SALAS } from "./mundo.js";

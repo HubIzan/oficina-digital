@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Oficina Digital · © 2026 Izan Trompeta (HubIzan) · Licencia MIT · https://github.com/HubIzan/oficina-digital
 """Ejecuta una tarea como usuario agente. La lanza systemd por cada conexion de la cola.
 
 Todo lo que corre aqui puede estar manipulado por un agente, asi que no decide nada: recibe

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Oficina Digital · © 2026 Izan Trompeta (HubIzan) · Licencia MIT · https://github.com/HubIzan/oficina-digital
 # Vista local de una web: construye un commit exacto (el main que aprobaste) y lo sirve solo en 127.0.0.1:8092.
 # Lo pide el canal de acciones, que no tiene red; el socket solo lo abre tu usuario (ni agente ni el panel).
 # Una conexion, una peticion: "<proyecto> <sha>". La ultima linea de la salida es: __CODIGO__ <n>

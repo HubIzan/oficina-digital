@@ -2,6 +2,7 @@
 estado: aprobado (2026-11-10)
 fecha: 2026-11-10
 ---
+<!-- Oficina Digital · © 2026 Izan Trompeta (HubIzan) · Licencia MIT · https://github.com/HubIzan/oficina-digital -->
 
 # Diseño del vigilante de correo
 

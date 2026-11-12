@@ -1,3 +1,4 @@
+// Oficina Digital · © 2026 Izan Trompeta (HubIzan) · Licencia MIT · https://github.com/HubIzan/oficina-digital
 // Pestana con la oficina 3D. Solo existe mientras se mira: al salir se libera la GPU y la memoria.
 import { useEffect, useRef, useState } from "react";
 import { obtener, suscribir } from "../datos.js";

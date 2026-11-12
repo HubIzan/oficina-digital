@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Oficina Digital · © 2026 Izan Trompeta (HubIzan) · Licencia MIT · https://github.com/HubIzan/oficina-digital
 # Oficina Digital - Fase 0: configuracion base de Ubuntu. Se ejecuta como root.
 # Se puede repetir sin riesgo si falla a medias.
 set -euo pipefail

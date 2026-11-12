@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Oficina Digital · © 2026 Izan Trompeta (HubIzan) · Licencia MIT · https://github.com/HubIzan/oficina-digital
 # Oficina Digital - acceso remoto.
 #   oficina-acceso autorizar "ssh-ed25519 AAAA... nombre"   (tu usuario)
 #   oficina-acceso syncthing-id                             (root)

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Oficina Digital · © 2026 Izan Trompeta (HubIzan) · Licencia MIT · https://github.com/HubIzan/oficina-digital
 # Comprueba la copia de seguridad. Se ejecuta como root.
 set -u
 # Una sesion de WSL puede tener otros montajes que los servicios: se mira desde donde viven ellos.

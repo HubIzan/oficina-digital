@@ -1,3 +1,4 @@
+<!-- Oficina Digital · © 2026 Izan Trompeta (HubIzan) · Licencia MIT · https://github.com/HubIzan/oficina-digital -->
 # __NOMBRE__
 
 Web de varias páginas con **Astro**, creada con la plantilla profesional de la Oficina. Astro solo se usa para construirla: lo publicado es HTML, CSS e imágenes.

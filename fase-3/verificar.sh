@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Oficina Digital · © 2026 Izan Trompeta (HubIzan) · Licencia MIT · https://github.com/HubIzan/oficina-digital
 # Oficina Digital - Fase 3: verificacion local. Se ejecuta como root; no publica nada.
 # Crea proyectos de prueba en /srv/oficina/proyectos y los borra al terminar.
 set -u

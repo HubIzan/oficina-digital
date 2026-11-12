@@ -1,3 +1,4 @@
+// Oficina Digital · © 2026 Izan Trompeta (HubIzan) · Licencia MIT · https://github.com/HubIzan/oficina-digital
 // node --test: lo que decide que la isla no enganie. Se ejecuta en Docker desde panel/verificar.sh.
 import assert from "node:assert/strict";
 import { test } from "node:test";

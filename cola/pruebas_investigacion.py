@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Oficina Digital · © 2026 Izan Trompeta (HubIzan) · Licencia MIT · https://github.com/HubIzan/oficina-digital
 """Pruebas del paso de investigacion, aisladas: carpetas temporales, sockets propios y Claude simulado.
 
 No toca la cola real, ni el panel en marcha, ni gasta cuota. Se lanza con tu usuario:

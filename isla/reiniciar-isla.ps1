@@ -1,3 +1,4 @@
+# Oficina Digital · © 2026 Izan Trompeta (HubIzan) · Licencia MIT · https://github.com/HubIzan/oficina-digital
 # Reinicia la isla de IzanLab: la cierra si esta abierta (o colgada) y la vuelve a abrir.
 # Usa los mismos argumentos que su acceso directo de inicio: en el portatil, --portatil.
 $ErrorActionPreference = 'SilentlyContinue'

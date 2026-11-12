@@ -3,6 +3,7 @@ tipo: diseño
 estado: aprobado
 creado: 2026-11-08
 ---
+<!-- Oficina Digital · © 2026 Izan Trompeta (HubIzan) · Licencia MIT · https://github.com/HubIzan/oficina-digital -->
 
 # Creador de webs
 

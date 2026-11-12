@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Oficina Digital · © 2026 Izan Trompeta (HubIzan) · Licencia MIT · https://github.com/HubIzan/oficina-digital
 # Copia de seguridad cifrada de la Oficina.
 #   oficina-copias hacer             hace una copia (la lanza el temporizador)
 #   oficina-copias mantener          borra copias antiguas y comprueba el repositorio

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Oficina Digital · © 2026 Izan Trompeta (HubIzan) · Licencia MIT · https://github.com/HubIzan/oficina-digital
 """Edita config.xml de Syncthing con el servicio parado.
 
   syncthing-config.py base <config.xml> <carpeta> <socket>

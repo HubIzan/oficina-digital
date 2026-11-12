@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Oficina Digital · © 2026 Izan Trompeta (HubIzan) · Licencia MIT · https://github.com/HubIzan/oficina-digital
 # Deshace instalar-correo.sh con la copia más antigua. Se ejecuta con sudo.
 # Quita el servicio, el clasificador, el usuario `correo` y su carpeta, con el permiso de Google guardado.
 # Las etiquetas de Gmail y lo que ya se haya archivado se quedan como están.

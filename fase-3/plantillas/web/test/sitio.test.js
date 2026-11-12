@@ -1,3 +1,4 @@
+// Oficina Digital · © 2026 Izan Trompeta (HubIzan) · Licencia MIT · https://github.com/HubIzan/oficina-digital
 import assert from "node:assert/strict";
 import { access, readFile } from "node:fs/promises";
 import { test } from "node:test";

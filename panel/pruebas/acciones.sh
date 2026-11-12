@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Oficina Digital · © 2026 Izan Trompeta (HubIzan) · Licencia MIT · https://github.com/HubIzan/oficina-digital
 # Prueba el canal de acciones con un proyecto desechable. Devuelve el numero de fallos.
 # La cola queda en pausa durante la prueba, para que no gaste cuota con la tarea que crea.
 set -u

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Oficina Digital · © 2026 Izan Trompeta (HubIzan) · Licencia MIT · https://github.com/HubIzan/oficina-digital
 # Instala desde /opt/oficina-webs, con sudo:
 #  - Opus por encargo (casilla «Usar Opus para planificar y revisar», oficina encargar --opus)
 #  - Preguntas y fallos en la isla: un agente puede pedirte un dato (NECESITO) y le contestas desde el chat

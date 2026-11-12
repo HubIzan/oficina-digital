@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Oficina Digital · © 2026 Izan Trompeta (HubIzan) · Licencia MIT · https://github.com/HubIzan/oficina-digital
 """Mando de la Oficina. Se ejecuta con TU usuario.
 
   oficina estado                         cuota, tarea activa y cola

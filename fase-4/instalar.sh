@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Oficina Digital · © 2026 Izan Trompeta (HubIzan) · Licencia MIT · https://github.com/HubIzan/oficina-digital
 # Oficina Digital - Fase 4: red, tests, cola y mando. Se ejecuta como root; se puede repetir.
 set -euo pipefail
 

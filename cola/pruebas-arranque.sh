@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Oficina Digital · © 2026 Izan Trompeta (HubIzan) · Licencia MIT · https://github.com/HubIzan/oficina-digital
 # Comprueba si un repo o el HOME de agente pueden colar ajustes en una sesion de Claude.
 # Gasta muy poca cuota: cada caso es una llamada de un turno con Haiku.
 set -u

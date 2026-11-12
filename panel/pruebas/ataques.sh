@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Oficina Digital · © 2026 Izan Trompeta (HubIzan) · Licencia MIT · https://github.com/HubIzan/oficina-digital
 # Etapa 6: ataques de prueba contra el panel y su canal. Se ejecuta como root.
 #   ataques.sh notas   solo notas y permisos: no toca la cola
 #   ataques.sh         todo. Exige que no haya una tarea en marcha y pausa la cola mientras dura.

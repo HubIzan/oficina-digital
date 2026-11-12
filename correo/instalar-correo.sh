@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Oficina Digital · © 2026 Izan Trompeta (HubIzan) · Licencia MIT · https://github.com/HubIzan/oficina-digital
 # Instala el vigilante de correo desde /opt/oficina-correo, con sudo. Diseño: Conocimiento/Diseño del vigilante de correo.md
 #  - usuario `correo` (el unico que guarda el permiso de Google), servicio cada 5 minutos
 #  - clasificador `oficina-clasificar` como `agente`: Haiku sin herramientas, por un socket que solo abre `correo`

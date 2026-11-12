@@ -1,3 +1,4 @@
+// Oficina Digital · © 2026 Izan Trompeta (HubIzan) · Licencia MIT · https://github.com/HubIzan/oficina-digital
 fn main() {
     // Lista cerrada de lo que la pagina del panel puede pedirle a la ventana.
     tauri_build::try_build(tauri_build::Attributes::new().app_manifest(

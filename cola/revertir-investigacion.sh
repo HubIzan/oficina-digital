@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Oficina Digital · © 2026 Izan Trompeta (HubIzan) · Licencia MIT · https://github.com/HubIzan/oficina-digital
 # Deshace instalar-investigacion.sh con la ultima copia que guardo. Se ejecuta con sudo.
 # No toca roles.json ni la nota del rol: un rol de mas no hace nada sin este codigo.
 set -euo pipefail

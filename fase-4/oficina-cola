@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Oficina Digital · © 2026 Izan Trompeta (HubIzan) · Licencia MIT · https://github.com/HubIzan/oficina-digital
 """Ejecuta la cola de la Oficina, de una en una, como usuario cola.
 
 No tiene credenciales ni red, y ningun agente puede tocarla: pide cada tarea por un socket a

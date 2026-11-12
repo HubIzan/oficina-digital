@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Oficina Digital · © 2026 Izan Trompeta (HubIzan) · Licencia MIT · https://github.com/HubIzan/oficina-digital
 # Comprueba la separacion de la cola y la ataca como lo haria un agente. Como root; no gasta cuota.
 # Antes de migrar se salta lo que depende de los permisos reales de la cola.
 set -u

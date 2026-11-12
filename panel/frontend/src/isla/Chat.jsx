@@ -1,3 +1,4 @@
+// Oficina Digital · © 2026 Izan Trompeta (HubIzan) · Licencia MIT · https://github.com/HubIzan/oficina-digital
 import { useCallback, useEffect, useRef, useState } from "react";
 import { enviar, obtener, pedir, suscribir } from "../datos.js";
 import { abrirGmail } from "./carcasa.js";

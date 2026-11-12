@@ -1,3 +1,4 @@
+// Oficina Digital · © 2026 Izan Trompeta (HubIzan) · Licencia MIT · https://github.com/HubIzan/oficina-digital
 // Cascada de caracteres verdes en un Canvas 2D. Solo dibuja al avanzar un paso, no en cada fotograma:
 // entre paso y paso la imagen sigue en pantalla sin coste. Los caracteres salen de una imagen ya pintada.
 

@@ -1,3 +1,4 @@
+# Oficina Digital · © 2026 Izan Trompeta (HubIzan) · Licencia MIT · https://github.com/HubIzan/oficina-digital
 # Oficina Digital - Fase 0, paso 1 (Windows, requiere administrador)
 # Activa WSL2. No instala ninguna distribucion y NO reinicia el equipo por su cuenta.
 

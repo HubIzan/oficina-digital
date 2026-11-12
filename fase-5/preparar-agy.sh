@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Oficina Digital · © 2026 Izan Trompeta (HubIzan) · Licencia MIT · https://github.com/HubIzan/oficina-digital
 # Fase 5: prueba de viabilidad de Antigravity CLI en un usuario aislado. Como root; se puede repetir.
 #   preparar-agy.sh            crea el usuario, la regla de red e instala agy
 #   preparar-agy.sh retirar    lo borra todo, credenciales incluidas

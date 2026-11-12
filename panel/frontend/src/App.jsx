@@ -1,3 +1,4 @@
+// Oficina Digital · © 2026 Izan Trompeta (HubIzan) · Licencia MIT · https://github.com/HubIzan/oficina-digital
 import { useEffect, useRef, useState } from "react";
 import { conectar, obtener, suscribir } from "./datos.js";
 import { esVersionVieja, recargarPorVersion } from "./recargar.js";

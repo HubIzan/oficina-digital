@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Oficina Digital · © 2026 Izan Trompeta (HubIzan) · Licencia MIT · https://github.com/HubIzan/oficina-digital
 """Clasificador de correos para oficina-correo. Corre como `agente` (tiene la sesion de Claude Pro).
 
 Una conexion, una peticion: {"correos": [{"n", "de", "asunto", "texto"}, ...]} (10 como mucho).

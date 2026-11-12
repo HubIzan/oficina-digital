@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Oficina Digital · © 2026 Izan Trompeta (HubIzan) · Licencia MIT · https://github.com/HubIzan/oficina-digital
 # Instala el creador de webs (etapas 1 y 2) desde /opt/oficina-webs. Se ejecuta con sudo.
 # Para deshacerlo: sudo bash /opt/oficina/cola/revertir-webs.sh
 set -euo pipefail

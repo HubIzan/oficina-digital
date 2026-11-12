@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Oficina Digital · © 2026 Izan Trompeta (HubIzan) · Licencia MIT · https://github.com/HubIzan/oficina-digital
 # Fase 5: comprueba la segunda opinion. Como root. Pausa la cola y usa un proyecto desechable.
 #   verificar.sh         sin gastar cuota: aislamiento, simulaciones y preparacion
 #   verificar.sh real    ademas, una auditoria real de un diff hostil (gasta un poco de cuota)

@@ -1,3 +1,4 @@
+// Oficina Digital · © 2026 Izan Trompeta (HubIzan) · Licencia MIT · https://github.com/HubIzan/oficina-digital
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
 

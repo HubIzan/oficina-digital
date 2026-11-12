@@ -1,3 +1,4 @@
+// Oficina Digital · © 2026 Izan Trompeta (HubIzan) · Licencia MIT · https://github.com/HubIzan/oficina-digital
 // Mobiliario de la oficina 3D. Geometria original en voxeles, agrupada para dibujarla de una vez.
 import { Color, InstancedMesh, Matrix4, MeshBasicMaterial } from "three";
 import { LETRAS } from "./fuente.js";

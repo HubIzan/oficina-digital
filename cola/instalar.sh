@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Oficina Digital · © 2026 Izan Trompeta (HubIzan) · Licencia MIT · https://github.com/HubIzan/oficina-digital
 # Separa la cola de los agentes. Se ejecuta como root; se puede repetir.
 #   instalar.sh preparar   crea el usuario y el servicio de trabajo. La cola real sigue como estaba.
 #   instalar.sh migrar     guarda una copia, cambia permisos y sustituye la cola real.

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Oficina Digital · © 2026 Izan Trompeta (HubIzan) · Licencia MIT · https://github.com/HubIzan/oficina-digital
 """Sustituye a Claude en la verificacion: no gasta cuota. El modo va en el encargo."""
 import json
 import os

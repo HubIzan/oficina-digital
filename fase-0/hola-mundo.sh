@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Oficina Digital · © 2026 Izan Trompeta (HubIzan) · Licencia MIT · https://github.com/HubIzan/oficina-digital
 # Oficina Digital - Fase 0: prueba final. Se ejecuta con TU usuario.
 # Sin argumentos solo trabaja en local. Con --publicar crea un repo PRIVADO en GitHub.
 set -euo pipefail

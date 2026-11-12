@@ -1,3 +1,4 @@
+// Oficina Digital · © 2026 Izan Trompeta (HubIzan) · Licencia MIT · https://github.com/HubIzan/oficina-digital
 // Agentes, CEO, Paquito y el Golden en voxeles. Todos comparten una sola malla: una llamada de dibujo.
 import { CanvasTexture, Color, InstancedMesh, Matrix4, MeshBasicMaterial, NearestFilter, SRGBColorSpace, Sprite, SpriteMaterial, Vector3 } from "three";
 import { ASIENTO_CEO, CAMA_GATO, CAMA_PERRO, casillasLibres, NAVIDAD, pasoAgente, pasoMascota, RINCONES, ROLES, ruta } from "./mundo.js";

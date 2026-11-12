@@ -1,3 +1,4 @@
+# Oficina Digital · © 2026 Izan Trompeta (HubIzan) · Licencia MIT · https://github.com/HubIzan/oficina-digital
 # Oficina Digital - Fase 2, paso 1: instala el acceso remoto dentro de Ubuntu.
 # No necesita administrador. Abre el enlace de inicio de sesion de Tailscale.
 $ErrorActionPreference = 'Stop'

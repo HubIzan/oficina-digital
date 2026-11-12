@@ -1,3 +1,4 @@
+# Oficina Digital · © 2026 Izan Trompeta (HubIzan) · Licencia MIT · https://github.com/HubIzan/oficina-digital
 table inet oficina_agente
 delete table inet oficina_agente
 table inet oficina_agente {

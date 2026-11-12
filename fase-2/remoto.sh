@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Oficina Digital · © 2026 Izan Trompeta (HubIzan) · Licencia MIT · https://github.com/HubIzan/oficina-digital
 # Oficina Digital - Fase 2: Tailscale, SSH y Syncthing dentro de Ubuntu.
 # Se ejecuta como root y se puede repetir sin riesgo. No inicia sesion en nada.
 set -euo pipefail

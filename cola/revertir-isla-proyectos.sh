@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Oficina Digital · © 2026 Izan Trompeta (HubIzan) · Licencia MIT · https://github.com/HubIzan/oficina-digital
 # Deshace instalar-isla-proyectos.sh con la ultima copia que guardo. Se ejecuta con sudo.
 # Los proyectos creados desde la isla se quedan: son repositorios normales.
 set -euo pipefail

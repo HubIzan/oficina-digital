@@ -1,3 +1,4 @@
+# Oficina Digital · © 2026 Izan Trompeta (HubIzan) · Licencia MIT · https://github.com/HubIzan/oficina-digital
 """Notas maliciosas contra el saneado real. Se ejecuta como panel, desde backend/."""
 import html.parser
 import sys

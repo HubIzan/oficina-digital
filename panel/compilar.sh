@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Oficina Digital · © 2026 Izan Trompeta (HubIzan) · Licencia MIT · https://github.com/HubIzan/oficina-digital
 # Compila la oficina dentro de Docker y deja el resultado en estatico/app. Se ejecuta como root.
 set -euo pipefail
 

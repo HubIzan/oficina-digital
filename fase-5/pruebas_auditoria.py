@@ -1,3 +1,4 @@
+# Oficina Digital · © 2026 Izan Trompeta (HubIzan) · Licencia MIT · https://github.com/HubIzan/oficina-digital
 """Pruebas del auditor con un proveedor simulado: no gastan cuota. Se ejecuta como auditor."""
 import importlib.machinery
 import importlib.util

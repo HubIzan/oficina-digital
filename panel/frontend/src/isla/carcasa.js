@@ -1,3 +1,4 @@
+// Oficina Digital · © 2026 Izan Trompeta (HubIzan) · Licencia MIT · https://github.com/HubIzan/oficina-digital
 // Puente con la ventana nativa. En un navegador normal no hace nada.
 // Tauri solo atiende aqui las ordenes de la lista de isla/capabilities/isla-remota.json.
 const tauri = window.__TAURI_INTERNALS__;

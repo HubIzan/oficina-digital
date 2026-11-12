@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Oficina Digital · © 2026 Izan Trompeta (HubIzan) · Licencia MIT · https://github.com/HubIzan/oficina-digital
 # Oficina Digital - Fase 1: monta solo Oficina/ y activa su historial local.
 # Se ejecuta como root y se puede repetir sin riesgo.
 set -euo pipefail

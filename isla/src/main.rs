@@ -1,3 +1,4 @@
+// Oficina Digital · © 2026 Izan Trompeta (HubIzan) · Licencia MIT · https://github.com/HubIzan/oficina-digital
 // Carcasa de la isla: una ventana transparente que muestra la pagina del panel.
 // Aqui no hay logica de la Oficina, y la interfaz se actualiza desde WSL2 sin recompilar esto.
 //   izanlab-isla.exe                     uso normal

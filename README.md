@@ -1,3 +1,4 @@
+<!-- Oficina Digital · © 2026 Izan Trompeta (HubIzan) · Licencia MIT · https://github.com/HubIzan/oficina-digital -->
 # Oficina Digital
 
 Una oficina de agentes de IA que trabaja para mí en mi propio PC: encargo una tarea, un Arquitecto escribe la especificación, yo la apruebo, un Desarrollador la programa en una rama, QA la revisa, y yo decido el merge. Todo corre aislado dentro de WSL2 (Ubuntu), con las cuotas de mi suscripción de Claude y **sin pagar nunca por uso de API**.
@@ -78,3 +79,10 @@ La diseñé y construí con ayuda de Claude: yo decido la arquitectura, las regl
 ## Licencia
 
 MIT. Ver `LICENSE`.
+
+## Autor
+
+Creado por **Izan Trompeta** ([HubIzan](https://github.com/HubIzan) · [portfolio](https://hubizan.github.io)).
+
+Repositorio original: https://github.com/HubIzan/oficina-digital, publicado el 11 de noviembre de 2026.
+Licencia MIT: si reutilizas este código, conserva este aviso y la cabecera de cada archivo.

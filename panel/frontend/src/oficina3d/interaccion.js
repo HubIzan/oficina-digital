@@ -1,3 +1,4 @@
+// Oficina Digital · © 2026 Izan Trompeta (HubIzan) · Licencia MIT · https://github.com/HubIzan/oficina-digital
 // Clics, nombres al pasar y arrastre, con formas invisibles mucho mas simples que la escena.
 import { BoxGeometry, Mesh, MeshBasicMaterial, Raycaster, Vector2 } from "three";
 import { KANBAN, MUEBLES, CAMA_GATO, CAMA_PERRO, ASIENTO_CEO, NOMBRE_PERRO, ROLES } from "./mundo.js";

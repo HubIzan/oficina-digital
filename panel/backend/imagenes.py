@@ -1,3 +1,4 @@
+# Oficina Digital · © 2026 Izan Trompeta (HubIzan) · Licencia MIT · https://github.com/HubIzan/oficina-digital
 """Limpia las imagenes de referencia de una web antes de que las vea nadie.
 
 Solo entran PNG, JPEG o WebP de verdad. Se decodifican y se vuelven a codificar desde los pixeles: lo que

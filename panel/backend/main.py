@@ -1,3 +1,4 @@
+# Oficina Digital · © 2026 Izan Trompeta (HubIzan) · Licencia MIT · https://github.com/HubIzan/oficina-digital
 """Panel de IzanLab: la oficina con datos reales. Las acciones pasan por un canal aparte."""
 import asyncio
 import base64

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Oficina Digital · © 2026 Izan Trompeta (HubIzan) · Licencia MIT · https://github.com/HubIzan/oficina-digital
 # Fase 5: segunda opinion de solo lectura con Antigravity. Como root; se puede repetir.
 # Convierte el usuario de prueba en auditor conservando su sesion.
 set -euo pipefail

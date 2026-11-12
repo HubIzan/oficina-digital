@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Oficina Digital · © 2026 Izan Trompeta (HubIzan) · Licencia MIT · https://github.com/HubIzan/oficina-digital
 # Anota la ultima vez que el portatil tenia la copia cifrada completa. La lanza un temporizador.
 # Si el portatil no esta al dia no se anota nada: asi la fecha envejece y el rack avisa.
 set -euo pipefail

@@ -1,3 +1,4 @@
+# Oficina Digital · © 2026 Izan Trompeta (HubIzan) · Licencia MIT · https://github.com/HubIzan/oficina-digital
 # Oficina Digital - Fase 0, paso 2 (Windows, SIN administrador)
 # Limita los recursos de WSL, crea Ubuntu, lanza base.sh y verifica el resultado.
 

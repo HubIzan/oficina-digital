@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Oficina Digital · © 2026 Izan Trompeta (HubIzan) · Licencia MIT · https://github.com/HubIzan/oficina-digital
 # Historial local de Oficina/. Nunca sube nada a GitHub.
 #   oficina-boveda historial [ruta]
 #   oficina-boveda ver <commit> <ruta>

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Oficina Digital · © 2026 Izan Trompeta (HubIzan) · Licencia MIT · https://github.com/HubIzan/oficina-digital
 # Limites de tiempo y de recursos para los servicios de la Oficina. Como root; se puede repetir.
 # Va despues de los instaladores de cada fase, con ajustes aparte que esos instaladores no pisan.
 set -euo pipefail

@@ -1,3 +1,4 @@
+// Oficina Digital · © 2026 Izan Trompeta (HubIzan) · Licencia MIT · https://github.com/HubIzan/oficina-digital
 // Comprobaciones de una web profesional. Miran el HTML final: public/ (HTML estatico) o dist/ (Astro).
 // Una web sin terminar no pasa: los datos marcados PENDIENTE y el dominio de ejemplo hacen fallar.
 // Sin dominio todavia se puede terminar con el provisional https://sin-dominio.invalid (no existe: nunca

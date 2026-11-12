@@ -1,3 +1,4 @@
+# Oficina Digital · © 2026 Izan Trompeta (HubIzan) · Licencia MIT · https://github.com/HubIzan/oficina-digital
 """Canal de acciones del panel. Corre con tu usuario, por cada conexion, y solo atiende al usuario panel.
 
 Lista cerrada: detalle, aprobar, rechazar, las de Triage y crear un proyecto en local. El panel no elige rutas, ramas ni comandos: solo

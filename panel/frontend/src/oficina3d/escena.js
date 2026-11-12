@@ -1,3 +1,4 @@
+// Oficina Digital · © 2026 Izan Trompeta (HubIzan) · Licencia MIT · https://github.com/HubIzan/oficina-digital
 // Oficina 3D: planta en voxeles, interaccion y control de consumo.
 import {
   BoxGeometry, Color, DirectionalLight, HemisphereLight, InstancedMesh, Matrix4, MeshBasicMaterial, MeshLambertMaterial,

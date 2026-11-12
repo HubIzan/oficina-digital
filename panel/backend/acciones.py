@@ -1,3 +1,4 @@
+# Oficina Digital · © 2026 Izan Trompeta (HubIzan) · Licencia MIT · https://github.com/HubIzan/oficina-digital
 """Cliente del canal oficina-panel-acciones. El panel no toca Git ni la cola: solo pregunta."""
 import json
 import socket

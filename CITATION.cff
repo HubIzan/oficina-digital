@@ -1,0 +1,12 @@
+cff-version: 1.2.0
+message: "Si usas o te basas en este proyecto, cítalo así."
+title: "Oficina Digital"
+type: software
+authors:
+  - given-names: "Izan"
+    family-names: "Trompeta"
+    alias: "HubIzan"
+repository-code: "https://github.com/HubIzan/oficina-digital"
+url: "https://hubizan.github.io"
+license: MIT
+date-released: "2026-11-11"

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Oficina Digital · © 2026 Izan Trompeta (HubIzan) · Licencia MIT · https://github.com/HubIzan/oficina-digital
 # Instala desde /opt/oficina-isla: investigar desde los encargos de la isla, decidir la investigacion
 # en la isla y crear proyectos desde la isla. Se ejecuta con sudo.
 # Para deshacerlo: sudo bash /opt/oficina/cola/revertir-isla-proyectos.sh

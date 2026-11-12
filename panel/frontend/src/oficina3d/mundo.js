@@ -1,3 +1,4 @@
+// Oficina Digital · © 2026 Izan Trompeta (HubIzan) · Licencia MIT · https://github.com/HubIzan/oficina-digital
 // Planta de IzanLab: 32 x 18 casillas.
 export const T = 16;
 export const ANCHO = 32;

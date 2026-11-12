@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Oficina Digital · © 2026 Izan Trompeta (HubIzan) · Licencia MIT · https://github.com/HubIzan/oficina-digital
 """Resume un repositorio en firmas, sin ejecutar nada de el, para ahorrar tokens.
 
   oficina-mapa <carpeta>            imprime el mapa
